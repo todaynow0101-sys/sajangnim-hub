@@ -255,22 +255,37 @@ function SegmentedTabs({ tabs, value, onChange }) {
   );
 }
 
-// 재료 단가 = (구매가 + 배송비) ÷ 구매수량, sub_unit_qty 있으면 그 단위로 한 번 더 환산
+// 재료 단가 = (구매가 + 배송비) ÷ 구매수량  (재료 구매단위 기준, 예: kg당 얼마)
 function ingredientUnitCost(ing) {
   if (!ing) return 0;
-  let cost = (Number(ing.purchase_price) + Number(ing.shipping_fee || 0)) / Number(ing.purchase_qty || 1);
-  if (ing.sub_unit_qty) cost = cost / Number(ing.sub_unit_qty);
-  return cost;
+  return (Number(ing.purchase_price) + Number(ing.shipping_fee || 0)) / Number(ing.purchase_qty || 1);
 }
 
-// 메뉴 원가 = Σ (재료단가 × 사용량 ÷ divide_by)
+// 표준 단위 환산 (그램/밀리리터 기준값). 구매단위와 사용단위가 이 표에 둘 다 있으면 자동 환산.
+const UNIT_TO_BASE = { kg: 1000, g: 1, mg: 0.001, l: 1000, L: 1000, ml: 1 };
+
+// fromUnit(구매단위) 1개가 toUnit(사용단위)으로 몇 개인지. 환산표에 없는 조합(개, 팩 등)은 1로 처리.
+function conversionFactor(fromUnit, toUnit) {
+  if (!fromUnit || !toUnit || fromUnit === toUnit) return 1;
+  const f = UNIT_TO_BASE[fromUnit];
+  const t = UNIT_TO_BASE[toUnit];
+  if (f && t) return f / t;
+  return 1;
+}
+
+// 메뉴 원가 = Σ (재료단가 ÷ 단위환산 × 사용량 ÷ divide_by)
+// divide_by는 "1팩을 12등분해서 1개 사용" 같은 등분 계산에 쓰임 (단위 환산과는 별개)
 function computeMenuCost(menuId, menuIngredients, ingredientsById) {
   return menuIngredients
     .filter((mi) => mi.menu_id === menuId)
     .reduce((sum, mi) => {
-      const unitCost = ingredientUnitCost(ingredientsById[mi.ingredient_id]);
+      const ing = ingredientsById[mi.ingredient_id];
+      if (!ing) return sum;
+      const unitCost = ingredientUnitCost(ing); // 구매단위(예: kg)당 가격
+      const factor = conversionFactor(ing.unit, mi.unit); // 구매단위 1개 = 사용단위 factor개
+      const costPerRecipeUnit = unitCost / (factor || 1);
       const divideBy = Number(mi.divide_by) || 1;
-      return sum + unitCost * Number(mi.amount_used) / divideBy;
+      return sum + (costPerRecipeUnit * Number(mi.amount_used)) / divideBy;
     }, 0);
 }
 
@@ -401,7 +416,7 @@ function IngredientsTab({ data }) {
             </div>
             <div style={{ fontSize: 14.5, fontWeight: 700, color: "#0A6E5D", textAlign: "right" }}>
               {Math.round(ingredientUnitCost(ing)).toLocaleString()}원
-              <div style={{ fontSize: 10.5, color: "#A6AEC1", fontWeight: 600 }}>{ing.sub_unit_name ? `/${ing.sub_unit_name}` : `/${ing.unit}`}</div>
+              <div style={{ fontSize: 10.5, color: "#A6AEC1", fontWeight: 600 }}>{`/${ing.unit}`}</div>
             </div>
           </button>
         )
@@ -581,76 +596,110 @@ function MenuForm({ name, setName, rows, ingredients, addRow, removeRow, updateR
 
 function ProfitTab({ data }) {
   const { menus, menuIngredients, ingredientsById, loading, error } = data;
-  const [menuId, setMenuId] = useState(null);
-  const [price, setPrice] = useState(15000);
+  const [cart, setCart] = useState({}); // menuId -> { qty, price }
   const [discount, setDiscount] = useState(0);
   const [channelId, setChannelId] = useState("coupang");
   const [customFee, setCustomFee] = useState(5);
-
-  React.useEffect(() => {
-    if (!menuId && menus.length > 0) setMenuId(menus[0].id);
-  }, [menus, menuId]);
 
   if (loading) return <EmptyState text="불러오는 중..." />;
   if (error) return <EmptyState text={`불러오기 실패: ${error}`} />;
   if (menus.length === 0) return <EmptyState text="메뉴부터 등록해주세요" />;
 
-  const cost = computeMenuCost(menuId, menuIngredients, ingredientsById);
-  const discountedPrice = Math.round(price * (1 - discount / 100));
+  const toggleMenu = (menuId) => {
+    setCart((prev) => {
+      const next = { ...prev };
+      if (next[menuId]) delete next[menuId];
+      else next[menuId] = { qty: 1, price: 0 };
+      return next;
+    });
+  };
+  const updateCart = (menuId, patch) => setCart((prev) => ({ ...prev, [menuId]: { ...prev[menuId], ...patch } }));
+
+  const cartEntries = Object.entries(cart);
+  const totalCost = cartEntries.reduce((sum, [menuId, item]) => sum + computeMenuCost(menuId, menuIngredients, ingredientsById) * item.qty, 0);
+  const totalPrice = cartEntries.reduce((sum, [, item]) => sum + Number(item.price || 0) * item.qty, 0);
+  const discountedPrice = Math.round(totalPrice * (1 - discount / 100));
   const channel = CHANNELS.find((c) => c.id === channelId);
   const fee = channelId === "custom" ? customFee : channel.fee;
   const feeAmount = Math.round((discountedPrice * fee) / 100);
-  const net = discountedPrice - Math.round(cost) - feeAmount;
+  const net = discountedPrice - Math.round(totalCost) - feeAmount;
   const marginRate = discountedPrice > 0 ? ((net / discountedPrice) * 100).toFixed(1) : 0;
 
   return (
     <div>
-      <div style={{ background: "#fff", borderRadius: 16, padding: 18, boxShadow: "0 1px 2px rgba(16,24,43,0.05)" }}>
-        <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 6, fontWeight: 600 }}>메뉴 선택</div>
-        <select value={menuId || ""} onChange={(e) => setMenuId(e.target.value)} style={{ ...inputStyle, marginBottom: 14 }}>
-          {menus.map((m) => (
-            <option key={m.id} value={m.id}>{m.name}</option>
-          ))}
-        </select>
-
-        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-          <label style={{ flex: 1 }}>
-            <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 6, fontWeight: 600 }}>판매가</div>
-            <input type="number" value={price} onChange={(e) => setPrice(Number(e.target.value) || 0)} style={inputStyle} />
-          </label>
-          <StatBox label="원가" value={`${Math.round(cost).toLocaleString()}원`} />
-        </div>
-
-        <label style={{ display: "block", marginBottom: 14 }}>
-          <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 6, fontWeight: 600 }}>할인율 (%)</div>
-          <input type="number" value={discount} onChange={(e) => setDiscount(Number(e.target.value) || 0)} style={inputStyle} />
-        </label>
-
-        <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 6, fontWeight: 600 }}>판매 채널</div>
-        <div style={{ display: "flex", gap: 6 }}>
-          {CHANNELS.map((c) => {
-            const sel = c.id === channelId;
+      <div style={{ background: "#fff", borderRadius: 16, padding: 18, boxShadow: "0 1px 2px rgba(16,24,43,0.05)", marginBottom: 12 }}>
+        <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 10, fontWeight: 600 }}>메뉴 담기 (여러 개 선택 가능)</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {menus.map((m) => {
+            const inCart = !!cart[m.id];
+            const unitCost = computeMenuCost(m.id, menuIngredients, ingredientsById);
             return (
-              <button key={c.id} onClick={() => setChannelId(c.id)} style={{ flex: 1, fontSize: 12.5, fontWeight: 700, padding: "9px 0", borderRadius: 10, border: "none", cursor: "pointer", background: sel ? "#0A6E5D" : "#F3F6FB", color: sel ? "#fff" : "#64708A" }}>
-                {c.label}
-              </button>
+              <div key={m.id} style={{ borderRadius: 12, border: inCart ? "1.5px solid #0A6E5D" : "1.5px solid #E3E9F3", background: inCart ? "#E4F3EF" : "#fff", overflow: "hidden" }}>
+                <button
+                  onClick={() => toggleMenu(m.id)}
+                  style={{ width: "100%", textAlign: "left", background: "transparent", border: "none", padding: "11px 12px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}
+                >
+                  <span style={{ fontSize: 13.5, fontWeight: 700 }}>{m.name}</span>
+                  <span style={{ fontSize: 12, color: "#64708A" }}>원가 {Math.round(unitCost).toLocaleString()}원</span>
+                </button>
+                {inCart && (
+                  <div style={{ display: "flex", gap: 8, padding: "0 12px 12px" }}>
+                    <label style={{ flex: 1 }}>
+                      <div style={{ fontSize: 11, color: "#64708A", marginBottom: 4 }}>수량</div>
+                      <input type="number" min="1" value={cart[m.id].qty} onChange={(e) => updateCart(m.id, { qty: Number(e.target.value) || 1 })} style={inputStyle} />
+                    </label>
+                    <label style={{ flex: 2 }}>
+                      <div style={{ fontSize: 11, color: "#64708A", marginBottom: 4 }}>개당 판매가</div>
+                      <input type="number" value={cart[m.id].price} onChange={(e) => updateCart(m.id, { price: e.target.value })} style={inputStyle} />
+                    </label>
+                  </div>
+                )}
+              </div>
             );
           })}
         </div>
-        {channelId === "custom" && (
-          <input type="number" value={customFee} onChange={(e) => setCustomFee(Number(e.target.value) || 0)} style={{ ...inputStyle, marginTop: 10 }} />
-        )}
       </div>
 
-      <div style={{ background: "#10182B", borderRadius: 16, padding: 20, marginTop: 12, color: "#fff" }}>
-        <div style={{ fontSize: 12.5, color: "#9AA5BD", marginBottom: 4 }}>할인 적용 후 예상 순이익</div>
-        <div style={{ fontSize: 28, fontWeight: 800 }}>{net.toLocaleString()}원</div>
-        <div style={{ display: "flex", gap: 14, marginTop: 12, fontSize: 12.5, color: "#C7D0E0" }}>
-          <span>마진율 {marginRate}%</span>
-          <span>할인가 {discountedPrice.toLocaleString()}원</span>
-          <span>수수료 {feeAmount.toLocaleString()}원</span>
+      {cartEntries.length > 0 && (
+        <div style={{ background: "#fff", borderRadius: 16, padding: 18, boxShadow: "0 1px 2px rgba(16,24,43,0.05)" }}>
+          <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+            <StatBox label="합산 판매가" value={`${totalPrice.toLocaleString()}원`} />
+            <StatBox label="합산 원가" value={`${Math.round(totalCost).toLocaleString()}원`} />
+          </div>
+
+          <label style={{ display: "block", marginBottom: 14 }}>
+            <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 6, fontWeight: 600 }}>전체 할인율 (%)</div>
+            <input type="number" value={discount} onChange={(e) => setDiscount(Number(e.target.value) || 0)} style={inputStyle} />
+          </label>
+
+          <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 6, fontWeight: 600 }}>판매 채널</div>
+          <div style={{ display: "flex", gap: 6 }}>
+            {CHANNELS.map((c) => {
+              const sel = c.id === channelId;
+              return (
+                <button key={c.id} onClick={() => setChannelId(c.id)} style={{ flex: 1, fontSize: 12.5, fontWeight: 700, padding: "9px 0", borderRadius: 10, border: "none", cursor: "pointer", background: sel ? "#0A6E5D" : "#F3F6FB", color: sel ? "#fff" : "#64708A" }}>
+                  {c.label}
+                </button>
+              );
+            })}
+          </div>
+          {channelId === "custom" && (
+            <input type="number" value={customFee} onChange={(e) => setCustomFee(Number(e.target.value) || 0)} style={{ ...inputStyle, marginTop: 10 }} />
+          )}
         </div>
-      </div>
+      )}
+
+      {cartEntries.length > 0 && (
+        <div style={{ background: "#10182B", borderRadius: 16, padding: 20, marginTop: 12, color: "#fff" }}>
+          <div style={{ fontSize: 12.5, color: "#9AA5BD", marginBottom: 4 }}>할인 적용 후 예상 순이익</div>
+          <div style={{ fontSize: 28, fontWeight: 800 }}>{net.toLocaleString()}원</div>
+          <div style={{ display: "flex", gap: 14, marginTop: 12, fontSize: 12.5, color: "#C7D0E0", flexWrap: "wrap" }}>
+            <span>마진율 {marginRate}%</span>
+            <span>할인가 {discountedPrice.toLocaleString()}원</span>
+            <span>수수료 {feeAmount.toLocaleString()}원</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
