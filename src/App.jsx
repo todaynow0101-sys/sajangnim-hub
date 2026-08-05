@@ -607,6 +607,7 @@ function MenuForm({ name, setName, price, setPrice, rows, ingredients, addRow, r
 function ProfitTab({ data }) {
   const { menus, menuIngredients, ingredientsById, loading, error } = data;
   const [cart, setCart] = useState({}); // menuId -> { qty, price }
+  const [discountType, setDiscountType] = useState("percent"); // percent | amount
   const [discount, setDiscount] = useState(0);
   const [channelId, setChannelId] = useState("coupang");
   const [customFee, setCustomFee] = useState(5);
@@ -632,7 +633,10 @@ function ProfitTab({ data }) {
   const cartEntries = Object.entries(cart);
   const totalCost = cartEntries.reduce((sum, [menuId, item]) => sum + computeMenuCost(menuId, menuIngredients, ingredientsById) * item.qty, 0);
   const totalPrice = cartEntries.reduce((sum, [, item]) => sum + Number(item.price || 0) * item.qty, 0);
-  const discountedPrice = Math.round(totalPrice * (1 - discount / 100));
+  const discountedPrice =
+    discountType === "percent"
+      ? Math.round(totalPrice * (1 - discount / 100))
+      : Math.max(0, Math.round(totalPrice - discount));
   const channel = CHANNELS.find((c) => c.id === channelId);
   const fee = channelId === "custom" ? customFee : channel.fee;
   const feeAmount = Math.round((discountedPrice * fee) / 100);
@@ -681,10 +685,31 @@ function ProfitTab({ data }) {
             <StatBox label="합산 원가" value={`${Math.round(totalCost).toLocaleString()}원`} />
           </div>
 
-          <label style={{ display: "block", marginBottom: 14 }}>
-            <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 6, fontWeight: 600 }}>전체 할인율 (%)</div>
-            <input type="number" value={discount} onChange={(e) => setDiscount(Number(e.target.value) || 0)} style={inputStyle} />
-          </label>
+          <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 6, fontWeight: 600 }}>할인</div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+            <div style={{ display: "flex", background: "#F3F6FB", borderRadius: 10, padding: 3, flex: 1 }}>
+              {[
+                { id: "percent", label: "정률(%)" },
+                { id: "amount", label: "정액(원)" },
+              ].map((t) => {
+                const sel = discountType === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    onClick={() => setDiscountType(t.id)}
+                    style={{
+                      flex: 1, padding: "9px 0", borderRadius: 8, border: "none", cursor: "pointer",
+                      fontSize: 12.5, fontWeight: 700, background: sel ? "#fff" : "transparent",
+                      color: sel ? "#10182B" : "#7B8399", boxShadow: sel ? "0 1px 3px rgba(16,24,43,0.1)" : "none",
+                    }}
+                  >
+                    {t.label}
+                  </button>
+                );
+              })}
+            </div>
+            <input type="number" value={discount} onChange={(e) => setDiscount(Number(e.target.value) || 0)} style={{ ...inputStyle, flex: 1 }} />
+          </div>
 
           <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 6, fontWeight: 600 }}>판매 채널</div>
           <div style={{ display: "flex", gap: 6 }}>
