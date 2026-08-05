@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { supabase } from "./supabaseClient";
 import {
   Calculator,
   Users,
@@ -212,51 +213,13 @@ function HomeScreen({ goTo }) {
   );
 }
 
-/* ───────────────────────── 장부 상세 ───────────────────────── */
+/* ───────────────────────── 장부 상세 (Supabase 연동) ───────────────────────── */
 
 const CHANNELS = [
   { id: "coupang", label: "쿠팡이츠", fee: 9.8 },
   { id: "baemin", label: "배달의민족", fee: 6.8 },
   { id: "custom", label: "직접입력", fee: null },
 ];
-
-const INGREDIENTS = [
-  { id: "pork", name: "돼지고기 목살", unitLabel: "kg당", unitCost: 12800 },
-  { id: "kimchi", name: "묵은지", unitLabel: "kg당", unitCost: 4200 },
-  { id: "tofu", name: "두부", unitLabel: "모당", unitCost: 1200 },
-  { id: "sauce", name: "양념 소스", unitLabel: "인분당", unitCost: 600 },
-];
-
-const SAVED_MENUS = [
-  {
-    id: "kimchijjim1",
-    name: "김치찜 1인",
-    price: 15000,
-    composition: [
-      { ingredientId: "pork", qty: 0.25 },
-      { ingredientId: "kimchi", qty: 0.3 },
-      { ingredientId: "sauce", qty: 1 },
-    ],
-  },
-  {
-    id: "kimchijjim2",
-    name: "김치찜 2인",
-    price: 27000,
-    composition: [
-      { ingredientId: "pork", qty: 0.5 },
-      { ingredientId: "kimchi", qty: 0.55 },
-      { ingredientId: "tofu", qty: 1 },
-      { ingredientId: "sauce", qty: 2 },
-    ],
-  },
-];
-
-function menuCost(menu) {
-  return menu.composition.reduce((sum, c) => {
-    const ing = INGREDIENTS.find((i) => i.id === c.ingredientId);
-    return sum + (ing ? ing.unitCost * c.qty : 0);
-  }, 0);
-}
 
 const GAGYE_TABS = [
   { id: "ingredients", label: "재료" },
@@ -274,16 +237,9 @@ function SegmentedTabs({ tabs, value, onChange }) {
             key={t.id}
             onClick={() => onChange(t.id)}
             style={{
-              flex: 1,
-              padding: "9px 0",
-              borderRadius: 8,
-              border: "none",
-              cursor: "pointer",
-              fontSize: 13.5,
-              fontWeight: 700,
-              background: active ? "#fff" : "transparent",
-              color: active ? "#10182B" : "#7B8399",
-              boxShadow: active ? "0 1px 3px rgba(16,24,43,0.1)" : "none",
+              flex: 1, padding: "9px 0", borderRadius: 8, border: "none", cursor: "pointer",
+              fontSize: 13.5, fontWeight: 700, background: active ? "#fff" : "transparent",
+              color: active ? "#10182B" : "#7B8399", boxShadow: active ? "0 1px 3px rgba(16,24,43,0.1)" : "none",
               transition: "all 0.15s ease",
             }}
           >
@@ -295,110 +251,213 @@ function SegmentedTabs({ tabs, value, onChange }) {
   );
 }
 
-function IngredientsTab() {
+// 재료 단가 = (구매가 + 배송비) ÷ 구매수량, sub_unit_qty 있으면 그 단위로 한 번 더 환산
+function ingredientUnitCost(ing) {
+  if (!ing) return 0;
+  let cost = (Number(ing.purchase_price) + Number(ing.shipping_fee || 0)) / Number(ing.purchase_qty || 1);
+  if (ing.sub_unit_qty) cost = cost / Number(ing.sub_unit_qty);
+  return cost;
+}
+
+// 메뉴 원가 = Σ (재료단가 × 사용량 ÷ divide_by)
+function computeMenuCost(menuId, menuIngredients, ingredientsById) {
+  return menuIngredients
+    .filter((mi) => mi.menu_id === menuId)
+    .reduce((sum, mi) => {
+      const unitCost = ingredientUnitCost(ingredientsById[mi.ingredient_id]);
+      const divideBy = Number(mi.divide_by) || 1;
+      return sum + unitCost * Number(mi.amount_used) / divideBy;
+    }, 0);
+}
+
+function useGagyeData() {
+  const [ingredients, setIngredients] = useState([]);
+  const [menus, setMenus] = useState([]);
+  const [menuIngredients, setMenuIngredients] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const reload = async () => {
+    setLoading(true);
+    setError(null);
+    const [ingRes, menuRes, miRes] = await Promise.all([
+      supabase.from("gagye_ingredients").select("*").order("sort_order", { ascending: true }),
+      supabase.from("gagye_menus").select("*").order("sort_order", { ascending: true }),
+      supabase.from("gagye_menu_ingredients").select("*"),
+    ]);
+    if (ingRes.error || menuRes.error || miRes.error) {
+      setError((ingRes.error || menuRes.error || miRes.error).message);
+    } else {
+      setIngredients(ingRes.data || []);
+      setMenus(menuRes.data || []);
+      setMenuIngredients(miRes.data || []);
+    }
+    setLoading(false);
+  };
+
+  React.useEffect(() => {
+    reload();
+  }, []);
+
+  const ingredientsById = useMemo(() => {
+    const map = {};
+    ingredients.forEach((i) => (map[i.id] = i));
+    return map;
+  }, [ingredients]);
+
+  return { ingredients, menus, menuIngredients, ingredientsById, loading, error, reload };
+}
+
+function EmptyState({ text }) {
+  return <div style={{ textAlign: "center", padding: "30px 0", color: "#64708A", fontSize: 13.5 }}>{text}</div>;
+}
+
+function IngredientsTab({ data }) {
+  const { ingredients, loading, error, reload } = data;
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ name: "", purchase_price: "", purchase_qty: "", unit: "kg", shipping_fee: "0", sub_unit_name: "", sub_unit_qty: "" });
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    if (!form.name || !form.purchase_price || !form.purchase_qty) return;
+    setSaving(true);
+    const { data: userData } = await supabase.auth.getUser();
+    const { error: insertError } = await supabase.from("gagye_ingredients").insert({
+      user_id: userData.user.id,
+      name: form.name,
+      purchase_price: Number(form.purchase_price),
+      purchase_qty: Number(form.purchase_qty),
+      unit: form.unit,
+      shipping_fee: Number(form.shipping_fee) || 0,
+      sub_unit_name: form.sub_unit_name || null,
+      sub_unit_qty: form.sub_unit_qty ? Number(form.sub_unit_qty) : null,
+    });
+    setSaving(false);
+    if (!insertError) {
+      setForm({ name: "", purchase_price: "", purchase_qty: "", unit: "kg", shipping_fee: "0", sub_unit_name: "", sub_unit_qty: "" });
+      setShowForm(false);
+      reload();
+    }
+  };
+
+  if (loading) return <EmptyState text="불러오는 중..." />;
+  if (error) return <EmptyState text={`불러오기 실패: ${error}`} />;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {INGREDIENTS.map((ing) => (
+      {ingredients.length === 0 && <EmptyState text="등록된 재료가 없어요" />}
+      {ingredients.map((ing) => (
         <div key={ing.id} style={{ background: "#fff", borderRadius: 14, padding: "14px 16px", boxShadow: "0 1px 2px rgba(16,24,43,0.05)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <div style={{ fontSize: 14.5, fontWeight: 700 }}>{ing.name}</div>
-            <div style={{ fontSize: 12, color: "#64708A", marginTop: 2 }}>{ing.unitLabel} · 배송비 포함 단가</div>
+            <div style={{ fontSize: 12, color: "#64708A", marginTop: 2 }}>
+              {ing.purchase_qty}{ing.unit}당 {Number(ing.purchase_price).toLocaleString()}원
+              {ing.shipping_fee > 0 ? ` (배송비 ${Number(ing.shipping_fee).toLocaleString()}원)` : ""}
+            </div>
           </div>
-          <div style={{ fontSize: 14.5, fontWeight: 700, color: "#0A6E5D" }}>{ing.unitCost.toLocaleString()}원</div>
+          <div style={{ fontSize: 14.5, fontWeight: 700, color: "#0A6E5D", textAlign: "right" }}>
+            {Math.round(ingredientUnitCost(ing)).toLocaleString()}원
+            <div style={{ fontSize: 10.5, color: "#A6AEC1", fontWeight: 600 }}>{ing.sub_unit_name ? `/${ing.sub_unit_name}` : `/${ing.unit}`}</div>
+          </div>
         </div>
       ))}
-      <button
-        style={{
-          padding: "13px 0", borderRadius: 12, border: "1.5px dashed #C7D0E0", background: "transparent",
-          color: "#64708A", fontSize: 13.5, fontWeight: 700, cursor: "pointer",
-        }}
-      >
-        + 재료 등록
-      </button>
+
+      {showForm ? (
+        <div style={{ background: "#fff", borderRadius: 14, padding: 16, boxShadow: "0 1px 2px rgba(16,24,43,0.05)", display: "flex", flexDirection: "column", gap: 8 }}>
+          <input placeholder="재료명" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={inputStyle} />
+          <div style={{ display: "flex", gap: 8 }}>
+            <input placeholder="구매가" type="number" value={form.purchase_price} onChange={(e) => setForm({ ...form, purchase_price: e.target.value })} style={inputStyle} />
+            <input placeholder="구매수량" type="number" value={form.purchase_qty} onChange={(e) => setForm({ ...form, purchase_qty: e.target.value })} style={inputStyle} />
+            <input placeholder="단위(kg,개..)" value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} style={{ ...inputStyle, maxWidth: 90 }} />
+          </div>
+          <input placeholder="배송비 (없으면 0)" type="number" value={form.shipping_fee} onChange={(e) => setForm({ ...form, shipping_fee: e.target.value })} style={inputStyle} />
+          <div style={{ display: "flex", gap: 8 }}>
+            <input placeholder="조리단위명 (예: g, 선택)" value={form.sub_unit_name} onChange={(e) => setForm({ ...form, sub_unit_name: e.target.value })} style={inputStyle} />
+            <input placeholder="환산값 (예: 1000)" type="number" value={form.sub_unit_qty} onChange={(e) => setForm({ ...form, sub_unit_qty: e.target.value })} style={inputStyle} />
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+            <button onClick={() => setShowForm(false)} style={secondaryBtnStyle}>취소</button>
+            <button onClick={save} disabled={saving} style={primaryBtnStyle}>{saving ? "저장 중..." : "저장"}</button>
+          </div>
+        </div>
+      ) : (
+        <button onClick={() => setShowForm(true)} style={dashedBtnStyle}>+ 재료 등록</button>
+      )}
     </div>
   );
 }
 
-function MenuTab() {
+function MenuTab({ data }) {
+  const { menus, menuIngredients, ingredientsById, loading, error } = data;
+
+  if (loading) return <EmptyState text="불러오는 중..." />;
+  if (error) return <EmptyState text={`불러오기 실패: ${error}`} />;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {SAVED_MENUS.map((menu) => {
-        const cost = menuCost(menu);
+      {menus.length === 0 && <EmptyState text="등록된 메뉴가 없어요" />}
+      {menus.map((menu) => {
+        const items = menuIngredients.filter((mi) => mi.menu_id === menu.id);
+        const cost = computeMenuCost(menu.id, menuIngredients, ingredientsById);
         return (
           <div key={menu.id} style={{ background: "#fff", borderRadius: 14, padding: "14px 16px", boxShadow: "0 1px 2px rgba(16,24,43,0.05)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <div style={{ fontSize: 14.5, fontWeight: 700 }}>{menu.name}</div>
-              <div style={{ fontSize: 12, color: "#64708A" }}>판매가 {menu.price.toLocaleString()}원</div>
-            </div>
+            <div style={{ fontSize: 14.5, fontWeight: 700, marginBottom: 6 }}>{menu.name}</div>
             <div style={{ fontSize: 12, color: "#64708A", marginBottom: 6 }}>
-              {menu.composition.map((c) => INGREDIENTS.find((i) => i.id === c.ingredientId)?.name).join(" · ")}
+              {items.map((i) => ingredientsById[i.ingredient_id]?.name).filter(Boolean).join(" · ") || "구성 재료 없음"}
             </div>
             <div style={{ fontSize: 13.5, fontWeight: 700, color: "#0A6E5D" }}>원가 {Math.round(cost).toLocaleString()}원</div>
           </div>
         );
       })}
-      <button
-        style={{
-          padding: "13px 0", borderRadius: 12, border: "1.5px dashed #C7D0E0", background: "transparent",
-          color: "#64708A", fontSize: 13.5, fontWeight: 700, cursor: "pointer",
-        }}
-      >
-        + 메뉴 등록
-      </button>
     </div>
   );
 }
 
-function ProfitTab() {
-  const [menuId, setMenuId] = useState(SAVED_MENUS[0].id);
+function ProfitTab({ data }) {
+  const { menus, menuIngredients, ingredientsById, loading, error } = data;
+  const [menuId, setMenuId] = useState(null);
+  const [price, setPrice] = useState(15000);
   const [discount, setDiscount] = useState(0);
   const [channelId, setChannelId] = useState("coupang");
   const [customFee, setCustomFee] = useState(5);
 
-  const menu = SAVED_MENUS.find((m) => m.id === menuId);
-  const cost = menuCost(menu);
-  const discountedPrice = Math.round(menu.price * (1 - discount / 100));
+  React.useEffect(() => {
+    if (!menuId && menus.length > 0) setMenuId(menus[0].id);
+  }, [menus, menuId]);
+
+  if (loading) return <EmptyState text="불러오는 중..." />;
+  if (error) return <EmptyState text={`불러오기 실패: ${error}`} />;
+  if (menus.length === 0) return <EmptyState text="메뉴부터 등록해주세요" />;
+
+  const cost = computeMenuCost(menuId, menuIngredients, ingredientsById);
+  const discountedPrice = Math.round(price * (1 - discount / 100));
   const channel = CHANNELS.find((c) => c.id === channelId);
   const fee = channelId === "custom" ? customFee : channel.fee;
   const feeAmount = Math.round((discountedPrice * fee) / 100);
-  const net = discountedPrice - cost - feeAmount;
+  const net = discountedPrice - Math.round(cost) - feeAmount;
   const marginRate = discountedPrice > 0 ? ((net / discountedPrice) * 100).toFixed(1) : 0;
 
   return (
     <div>
       <div style={{ background: "#fff", borderRadius: 16, padding: 18, boxShadow: "0 1px 2px rgba(16,24,43,0.05)" }}>
         <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 6, fontWeight: 600 }}>메뉴 선택</div>
-        <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
-          {SAVED_MENUS.map((m) => {
-            const sel = m.id === menuId;
-            return (
-              <button
-                key={m.id}
-                onClick={() => setMenuId(m.id)}
-                style={{
-                  flex: 1, fontSize: 12.5, fontWeight: 700, padding: "9px 0", borderRadius: 10, border: "none",
-                  cursor: "pointer", background: sel ? "#0A6E5D" : "#F3F6FB", color: sel ? "#fff" : "#64708A",
-                }}
-              >
-                {m.name}
-              </button>
-            );
-          })}
-        </div>
+        <select value={menuId || ""} onChange={(e) => setMenuId(e.target.value)} style={{ ...inputStyle, marginBottom: 14 }}>
+          {menus.map((m) => (
+            <option key={m.id} value={m.id}>{m.name}</option>
+          ))}
+        </select>
 
         <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-          <StatBox label="판매가" value={`${menu.price.toLocaleString()}원`} />
+          <label style={{ flex: 1 }}>
+            <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 6, fontWeight: 600 }}>판매가</div>
+            <input type="number" value={price} onChange={(e) => setPrice(Number(e.target.value) || 0)} style={inputStyle} />
+          </label>
           <StatBox label="원가" value={`${Math.round(cost).toLocaleString()}원`} />
         </div>
 
         <label style={{ display: "block", marginBottom: 14 }}>
           <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 6, fontWeight: 600 }}>할인율 (%)</div>
-          <input
-            type="number"
-            value={discount}
-            onChange={(e) => setDiscount(Number(e.target.value) || 0)}
-            style={{ width: "100%", boxSizing: "border-box", padding: "12px 14px", borderRadius: 10, border: "1.5px solid #E3E9F3", fontSize: 15, fontWeight: 700 }}
-          />
+          <input type="number" value={discount} onChange={(e) => setDiscount(Number(e.target.value) || 0)} style={inputStyle} />
         </label>
 
         <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 6, fontWeight: 600 }}>판매 채널</div>
@@ -406,26 +465,14 @@ function ProfitTab() {
           {CHANNELS.map((c) => {
             const sel = c.id === channelId;
             return (
-              <button
-                key={c.id}
-                onClick={() => setChannelId(c.id)}
-                style={{
-                  flex: 1, fontSize: 12.5, fontWeight: 700, padding: "9px 0", borderRadius: 10, border: "none",
-                  cursor: "pointer", background: sel ? "#0A6E5D" : "#F3F6FB", color: sel ? "#fff" : "#64708A",
-                }}
-              >
+              <button key={c.id} onClick={() => setChannelId(c.id)} style={{ flex: 1, fontSize: 12.5, fontWeight: 700, padding: "9px 0", borderRadius: 10, border: "none", cursor: "pointer", background: sel ? "#0A6E5D" : "#F3F6FB", color: sel ? "#fff" : "#64708A" }}>
                 {c.label}
               </button>
             );
           })}
         </div>
         {channelId === "custom" && (
-          <input
-            type="number"
-            value={customFee}
-            onChange={(e) => setCustomFee(Number(e.target.value) || 0)}
-            style={{ width: "100%", boxSizing: "border-box", padding: "12px 14px", borderRadius: 10, border: "1.5px solid #E3E9F3", fontSize: 15, fontWeight: 700, marginTop: 10 }}
-          />
+          <input type="number" value={customFee} onChange={(e) => setCustomFee(Number(e.target.value) || 0)} style={{ ...inputStyle, marginTop: 10 }} />
         )}
       </div>
 
@@ -442,8 +489,14 @@ function ProfitTab() {
   );
 }
 
+const inputStyle = { flex: 1, boxSizing: "border-box", padding: "11px 12px", borderRadius: 10, border: "1.5px solid #E3E9F3", fontSize: 13.5, fontWeight: 600, width: "100%" };
+const primaryBtnStyle = { flex: 1, padding: "11px 0", borderRadius: 10, border: "none", background: "#10182B", color: "#fff", fontSize: 13.5, fontWeight: 700, cursor: "pointer" };
+const secondaryBtnStyle = { flex: 1, padding: "11px 0", borderRadius: 10, border: "1.5px solid #E3E9F3", background: "#fff", color: "#64708A", fontSize: 13.5, fontWeight: 700, cursor: "pointer" };
+const dashedBtnStyle = { padding: "13px 0", borderRadius: 12, border: "1.5px dashed #C7D0E0", background: "transparent", color: "#64708A", fontSize: 13.5, fontWeight: 700, cursor: "pointer" };
+
 function GagyeDetail({ goBack }) {
   const [tab, setTab] = useState("profit");
+  const data = useGagyeData();
 
   return (
     <div style={{ padding: "0 16px 24px" }}>
@@ -451,9 +504,9 @@ function GagyeDetail({ goBack }) {
       <div style={{ padding: "8px 0 0" }}>
         <p style={{ fontSize: 13.5, color: "#64708A", margin: "0 0 16px" }}>재료 등록 → 메뉴 원가 → 손익 확인, 세 단계로 관리해요</p>
         <SegmentedTabs tabs={GAGYE_TABS} value={tab} onChange={setTab} />
-        {tab === "ingredients" && <IngredientsTab />}
-        {tab === "menu" && <MenuTab />}
-        {tab === "profit" && <ProfitTab />}
+        {tab === "ingredients" && <IngredientsTab data={data} />}
+        {tab === "menu" && <MenuTab data={data} />}
+        {tab === "profit" && <ProfitTab data={data} />}
       </div>
     </div>
   );
@@ -914,10 +967,31 @@ function OnboardingScreen({ onDone }) {
   );
 }
 
-function LoginScreen({ onLogin }) {
+function LoginScreen() {
   const [mode, setMode] = useState("login"); // login | signup
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [signupDone, setSignupDone] = useState(false);
+
+  const submit = async () => {
+    setError("");
+    if (!email || !pw) {
+      setError("이메일과 비밀번호를 입력해주세요");
+      return;
+    }
+    setLoading(true);
+    if (mode === "login") {
+      const { error: err } = await supabase.auth.signInWithPassword({ email, password: pw });
+      if (err) setError(err.message === "Invalid login credentials" ? "이메일 또는 비밀번호가 맞지 않아요" : err.message);
+    } else {
+      const { error: err } = await supabase.auth.signUp({ email, password: pw });
+      if (err) setError(err.message);
+      else setSignupDone(true);
+    }
+    setLoading(false);
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh", padding: "40px 24px 28px" }}>
@@ -936,56 +1010,67 @@ function LoginScreen({ onLogin }) {
         장부 · 페이로그 · 지원사업, 계정 하나로 다 확인해요
       </p>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 20 }}>
-        <label style={{ display: "block" }}>
-          <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 6, fontWeight: 600 }}>이메일</div>
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="example@email.com"
-            style={{ width: "100%", boxSizing: "border-box", padding: "13px 14px", borderRadius: 11, border: "1.5px solid #E3E9F3", fontSize: 14.5 }}
-          />
-        </label>
-        <label style={{ display: "block" }}>
-          <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 6, fontWeight: 600 }}>비밀번호</div>
-          <input
-            type="password"
-            value={pw}
-            onChange={(e) => setPw(e.target.value)}
-            placeholder="8자 이상"
-            style={{ width: "100%", boxSizing: "border-box", padding: "13px 14px", borderRadius: 11, border: "1.5px solid #E3E9F3", fontSize: 14.5 }}
-          />
-        </label>
-      </div>
+      {signupDone ? (
+        <div style={{ background: "#E4F3EF", borderRadius: 12, padding: 16, fontSize: 13.5, color: "#0A6E5D", lineHeight: 1.6 }}>
+          가입 확인 메일을 보냈어요. 메일함에서 인증 링크를 눌러주세요, 그 다음 로그인하시면 돼요.
+        </div>
+      ) : (
+        <>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 8 }}>
+            <label style={{ display: "block" }}>
+              <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 6, fontWeight: 600 }}>이메일</div>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="example@email.com"
+                style={{ width: "100%", boxSizing: "border-box", padding: "13px 14px", borderRadius: 11, border: "1.5px solid #E3E9F3", fontSize: 14.5 }}
+              />
+            </label>
+            <label style={{ display: "block" }}>
+              <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 6, fontWeight: 600 }}>비밀번호</div>
+              <input
+                type="password"
+                value={pw}
+                onChange={(e) => setPw(e.target.value)}
+                placeholder="8자 이상"
+                style={{ width: "100%", boxSizing: "border-box", padding: "13px 14px", borderRadius: 11, border: "1.5px solid #E3E9F3", fontSize: 14.5 }}
+              />
+            </label>
+          </div>
 
-      <button
-        onClick={onLogin}
-        style={{
-          width: "100%", padding: "16px 0", borderRadius: 14, border: "none", background: "#10182B",
-          color: "#fff", fontSize: 16, fontWeight: 700, cursor: "pointer", marginBottom: 14,
-        }}
-      >
-        {mode === "login" ? "로그인" : "가입하고 시작하기"}
-      </button>
+          {error && <div style={{ fontSize: 12.5, color: "#FF6A45", marginBottom: 12 }}>{error}</div>}
 
-      <div style={{ textAlign: "center", fontSize: 13, color: "#64708A" }}>
-        {mode === "login" ? (
-          <>
-            계정이 없으신가요?{" "}
-            <button onClick={() => setMode("signup")} style={{ background: "none", border: "none", color: "#0A6E5D", fontWeight: 700, cursor: "pointer", fontSize: 13 }}>
-              회원가입
-            </button>
-          </>
-        ) : (
-          <>
-            이미 계정이 있으신가요?{" "}
-            <button onClick={() => setMode("login")} style={{ background: "none", border: "none", color: "#0A6E5D", fontWeight: 700, cursor: "pointer", fontSize: 13 }}>
-              로그인
-            </button>
-          </>
-        )}
-      </div>
+          <button
+            onClick={submit}
+            disabled={loading}
+            style={{
+              width: "100%", padding: "16px 0", borderRadius: 14, border: "none", background: "#10182B",
+              color: "#fff", fontSize: 16, fontWeight: 700, cursor: "pointer", marginTop: 8, marginBottom: 14,
+            }}
+          >
+            {loading ? "처리 중..." : mode === "login" ? "로그인" : "가입하고 시작하기"}
+          </button>
+
+          <div style={{ textAlign: "center", fontSize: 13, color: "#64708A" }}>
+            {mode === "login" ? (
+              <>
+                계정이 없으신가요?{" "}
+                <button onClick={() => setMode("signup")} style={{ background: "none", border: "none", color: "#0A6E5D", fontWeight: 700, cursor: "pointer", fontSize: 13 }}>
+                  회원가입
+                </button>
+              </>
+            ) : (
+              <>
+                이미 계정이 있으신가요?{" "}
+                <button onClick={() => setMode("login")} style={{ background: "none", border: "none", color: "#0A6E5D", fontWeight: 700, cursor: "pointer", fontSize: 13 }}>
+                  로그인
+                </button>
+              </>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -993,8 +1078,26 @@ function LoginScreen({ onLogin }) {
 /* ───────────────────────── 루트 ───────────────────────── */
 
 export default function App() {
-  const [phase, setPhase] = useState("onboarding"); // onboarding | login | app
+  const [phase, setPhase] = useState("loading"); // loading | onboarding | login | app
   const [screen, setScreen] = useState("home");
+
+  React.useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setPhase(session ? "app" : "onboarding");
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setPhase(session ? "app" : "onboarding");
+    });
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  if (phase === "loading") {
+    return (
+      <div style={{ minHeight: "100vh", background: "#F3F6FB", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Pretendard Variable', Pretendard, sans-serif", color: "#64708A", fontSize: 13.5 }}>
+        불러오는 중...
+      </div>
+    );
+  }
 
   if (phase === "onboarding") {
     return (
@@ -1015,7 +1118,7 @@ export default function App() {
     return (
       <div style={{ minHeight: "100%", background: "#F3F6FB", fontFamily: "'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont, 'Malgun Gothic', sans-serif", color: "#10182B", display: "flex", justifyContent: "center" }}>
         <div style={{ width: "100%", maxWidth: 420 }}>
-          <LoginScreen onLogin={() => setPhase("app")} />
+          <LoginScreen />
         </div>
         <style>{`
           @import url("https://cdnjs.cloudflare.com/ajax/libs/pretendard/1.3.9/variable/pretendardvariable-dynamic-subset.min.css");
@@ -1025,6 +1128,7 @@ export default function App() {
       </div>
     );
   }
+
 
 
   return (
