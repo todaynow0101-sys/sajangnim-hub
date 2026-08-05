@@ -12,6 +12,7 @@ import {
   Home,
   Store,
   Bell,
+  LogOut,
   Check,
   ArrowRight,
   Building2,
@@ -156,6 +157,7 @@ function HomeScreen({ goTo }) {
             <div style={{ fontSize: 13, color: "#64708A", fontWeight: 600 }}>사장님 홈</div>
           </div>
           <button
+            onClick={() => supabase.auth.signOut()}
             style={{
               width: 34,
               height: 34,
@@ -166,9 +168,11 @@ function HomeScreen({ goTo }) {
               alignItems: "center",
               justifyContent: "center",
               boxShadow: "0 1px 2px rgba(16,24,43,0.06)",
+              cursor: "pointer",
             }}
+            title="로그아웃"
           >
-            <Bell size={15} color="#10182B" />
+            <LogOut size={15} color="#10182B" />
           </button>
         </div>
         <h1 style={{ fontSize: 21, fontWeight: 800, margin: "16px 0 2px" }}>오늘도 수고 많으세요</h1>
@@ -969,7 +973,7 @@ function OnboardingScreen({ onDone }) {
 
 function LoginScreen() {
   const [mode, setMode] = useState("login"); // login | signup
-  const [email, setEmail] = useState("");
+  const [userId, setUserId] = useState("");
   const [pw, setPw] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -977,14 +981,15 @@ function LoginScreen() {
 
   const submit = async () => {
     setError("");
-    if (!email || !pw) {
-      setError("이메일과 비밀번호를 입력해주세요");
+    if (!userId || !pw) {
+      setError("아이디와 비밀번호를 입력해주세요");
       return;
     }
+    const email = `${userId.trim().toLowerCase()}@paylog.app`;
     setLoading(true);
     if (mode === "login") {
       const { error: err } = await supabase.auth.signInWithPassword({ email, password: pw });
-      if (err) setError(err.message === "Invalid login credentials" ? "이메일 또는 비밀번호가 맞지 않아요" : err.message);
+      if (err) setError(err.message === "Invalid login credentials" ? "아이디 또는 비밀번호가 맞지 않아요" : err.message);
     } else {
       const { error: err } = await supabase.auth.signUp({ email, password: pw });
       if (err) setError(err.message);
@@ -1018,12 +1023,12 @@ function LoginScreen() {
         <>
           <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 8 }}>
             <label style={{ display: "block" }}>
-              <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 6, fontWeight: 600 }}>이메일</div>
+              <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 6, fontWeight: 600 }}>아이디</div>
               <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="example@email.com"
+                type="text"
+                value={userId}
+                onChange={(e) => setUserId(e.target.value)}
+                placeholder="PayLog에서 쓰시는 아이디"
                 style={{ width: "100%", boxSizing: "border-box", padding: "13px 14px", borderRadius: 11, border: "1.5px solid #E3E9F3", fontSize: 14.5 }}
               />
             </label>
