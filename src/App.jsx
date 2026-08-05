@@ -460,11 +460,13 @@ function MenuTab({ data }) {
   const { menus, menuIngredients, ingredients, ingredientsById, loading, error, reload } = data;
   const [editingId, setEditingId] = useState(null); // null | "new" | menu.id
   const [name, setName] = useState("");
+  const [price, setPrice] = useState("");
   const [rows, setRows] = useState([]); // [{ingredient_id, amount_used, divide_by, unit}]
   const [saving, setSaving] = useState(false);
 
   const openNew = () => {
     setName("");
+    setPrice("");
     setRows([{ ingredient_id: ingredients[0]?.id || "", amount_used: "", divide_by: "1", unit: "" }]);
     setEditingId("new");
   };
@@ -472,6 +474,7 @@ function MenuTab({ data }) {
   const openEdit = (menu) => {
     const items = menuIngredients.filter((mi) => mi.menu_id === menu.id);
     setName(menu.name);
+    setPrice(menu.price ? String(menu.price) : "");
     setRows(
       items.length
         ? items.map((mi) => ({ ingredient_id: mi.ingredient_id, amount_used: String(mi.amount_used), divide_by: String(mi.divide_by ?? 1), unit: mi.unit || "" }))
@@ -488,14 +491,15 @@ function MenuTab({ data }) {
     if (!name) return;
     setSaving(true);
     const validRows = rows.filter((r) => r.ingredient_id && r.amount_used);
+    const priceValue = Number(price) || 0;
     let menuId = editingId;
     if (editingId === "new") {
       const { data: userData } = await supabase.auth.getUser();
-      const { data: inserted, error: err } = await supabase.from("gagye_menus").insert({ user_id: userData.user.id, name }).select().single();
+      const { data: inserted, error: err } = await supabase.from("gagye_menus").insert({ user_id: userData.user.id, name, price: priceValue }).select().single();
       if (err) { setSaving(false); return; }
       menuId = inserted.id;
     } else {
-      await supabase.from("gagye_menus").update({ name }).eq("id", editingId);
+      await supabase.from("gagye_menus").update({ name, price: priceValue }).eq("id", editingId);
       await supabase.from("gagye_menu_ingredients").delete().eq("menu_id", editingId);
     }
     if (validRows.length > 0) {
@@ -534,7 +538,7 @@ function MenuTab({ data }) {
       {menus.map((menu) => {
         if (editingId === menu.id) {
           return (
-            <MenuForm key={menu.id} name={name} setName={setName} rows={rows} ingredients={ingredients} addRow={addRow} removeRow={removeRow} updateRow={updateRow} onCancel={() => setEditingId(null)} onSave={save} onDelete={() => remove(menu.id)} saving={saving} isNew={false} />
+            <MenuForm key={menu.id} name={name} setName={setName} price={price} setPrice={setPrice} rows={rows} ingredients={ingredients} addRow={addRow} removeRow={removeRow} updateRow={updateRow} onCancel={() => setEditingId(null)} onSave={save} onDelete={() => remove(menu.id)} saving={saving} isNew={false} />
           );
         }
         const items = menuIngredients.filter((mi) => mi.menu_id === menu.id);
@@ -545,7 +549,10 @@ function MenuTab({ data }) {
             onClick={() => openEdit(menu)}
             style={{ textAlign: "left", width: "100%", background: "#fff", border: "none", borderRadius: 14, padding: "14px 16px", boxShadow: "0 1px 2px rgba(16,24,43,0.05)", cursor: "pointer" }}
           >
-            <div style={{ fontSize: 14.5, fontWeight: 700, marginBottom: 6 }}>{menu.name}</div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <div style={{ fontSize: 14.5, fontWeight: 700 }}>{menu.name}</div>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: "#10182B" }}>{Number(menu.price || 0).toLocaleString()}원</div>
+            </div>
             <div style={{ fontSize: 12, color: "#64708A", marginBottom: 6 }}>
               {items.map((i) => ingredientsById[i.ingredient_id]?.name).filter(Boolean).join(" · ") || "구성 재료 없음"}
             </div>
@@ -555,7 +562,7 @@ function MenuTab({ data }) {
       })}
 
       {editingId === "new" ? (
-        <MenuForm name={name} setName={setName} rows={rows} ingredients={ingredients} addRow={addRow} removeRow={removeRow} updateRow={updateRow} onCancel={() => setEditingId(null)} onSave={save} saving={saving} isNew={true} />
+        <MenuForm name={name} setName={setName} price={price} setPrice={setPrice} rows={rows} ingredients={ingredients} addRow={addRow} removeRow={removeRow} updateRow={updateRow} onCancel={() => setEditingId(null)} onSave={save} saving={saving} isNew={true} />
       ) : (
         <button onClick={openNew} style={dashedBtnStyle}>+ 메뉴 등록</button>
       )}
@@ -563,10 +570,13 @@ function MenuTab({ data }) {
   );
 }
 
-function MenuForm({ name, setName, rows, ingredients, addRow, removeRow, updateRow, onCancel, onSave, onDelete, saving, isNew }) {
+function MenuForm({ name, setName, price, setPrice, rows, ingredients, addRow, removeRow, updateRow, onCancel, onSave, onDelete, saving, isNew }) {
   return (
     <div style={{ background: "#fff", borderRadius: 14, padding: 16, boxShadow: "0 1px 2px rgba(16,24,43,0.05)", display: "flex", flexDirection: "column", gap: 10 }}>
-      <input placeholder="메뉴명" value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
+      <div style={{ display: "flex", gap: 8 }}>
+        <input placeholder="메뉴명" value={name} onChange={(e) => setName(e.target.value)} style={{ ...inputStyle, flex: 2 }} />
+        <input placeholder="판매가" type="number" value={price} onChange={(e) => setPrice(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
+      </div>
 
       <div style={{ fontSize: 12.5, color: "#64708A", fontWeight: 600 }}>구성 재료</div>
       {rows.map((r, idx) => (
@@ -608,8 +618,12 @@ function ProfitTab({ data }) {
   const toggleMenu = (menuId) => {
     setCart((prev) => {
       const next = { ...prev };
-      if (next[menuId]) delete next[menuId];
-      else next[menuId] = { qty: 1, price: 0 };
+      if (next[menuId]) {
+        delete next[menuId];
+      } else {
+        const menu = menus.find((m) => m.id === menuId);
+        next[menuId] = { qty: 1, price: Number(menu?.price) || 0 };
+      }
       return next;
     });
   };
@@ -640,7 +654,7 @@ function ProfitTab({ data }) {
                   style={{ width: "100%", textAlign: "left", background: "transparent", border: "none", padding: "11px 12px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}
                 >
                   <span style={{ fontSize: 13.5, fontWeight: 700 }}>{m.name}</span>
-                  <span style={{ fontSize: 12, color: "#64708A" }}>원가 {Math.round(unitCost).toLocaleString()}원</span>
+                  <span style={{ fontSize: 12, color: "#64708A" }}>판매가 {Number(m.price || 0).toLocaleString()}원 · 원가 {Math.round(unitCost).toLocaleString()}원</span>
                 </button>
                 {inCart && (
                   <div style={{ display: "flex", gap: 8, padding: "0 12px 12px" }}>
