@@ -316,18 +316,36 @@ function EmptyState({ text }) {
   return <div style={{ textAlign: "center", padding: "30px 0", color: "#64708A", fontSize: 13.5 }}>{text}</div>;
 }
 
+const emptyIngForm = { name: "", purchase_price: "", purchase_qty: "", unit: "kg", shipping_fee: "0", sub_unit_name: "", sub_unit_qty: "" };
+
 function IngredientsTab({ data }) {
   const { ingredients, loading, error, reload } = data;
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ name: "", purchase_price: "", purchase_qty: "", unit: "kg", shipping_fee: "0", sub_unit_name: "", sub_unit_qty: "" });
+  const [editingId, setEditingId] = useState(null); // null | "new" | ingredient.id
+  const [form, setForm] = useState(emptyIngForm);
   const [saving, setSaving] = useState(false);
+
+  const openNew = () => {
+    setForm(emptyIngForm);
+    setEditingId("new");
+  };
+
+  const openEdit = (ing) => {
+    setForm({
+      name: ing.name,
+      purchase_price: String(ing.purchase_price),
+      purchase_qty: String(ing.purchase_qty),
+      unit: ing.unit,
+      shipping_fee: String(ing.shipping_fee ?? 0),
+      sub_unit_name: ing.sub_unit_name || "",
+      sub_unit_qty: ing.sub_unit_qty ? String(ing.sub_unit_qty) : "",
+    });
+    setEditingId(ing.id);
+  };
 
   const save = async () => {
     if (!form.name || !form.purchase_price || !form.purchase_qty) return;
     setSaving(true);
-    const { data: userData } = await supabase.auth.getUser();
-    const { error: insertError } = await supabase.from("gagye_ingredients").insert({
-      user_id: userData.user.id,
+    const payload = {
       name: form.name,
       purchase_price: Number(form.purchase_price),
       purchase_qty: Number(form.purchase_qty),
@@ -335,13 +353,28 @@ function IngredientsTab({ data }) {
       shipping_fee: Number(form.shipping_fee) || 0,
       sub_unit_name: form.sub_unit_name || null,
       sub_unit_qty: form.sub_unit_qty ? Number(form.sub_unit_qty) : null,
-    });
+    };
+    let err;
+    if (editingId === "new") {
+      const { data: userData } = await supabase.auth.getUser();
+      ({ error: err } = await supabase.from("gagye_ingredients").insert({ ...payload, user_id: userData.user.id }));
+    } else {
+      ({ error: err } = await supabase.from("gagye_ingredients").update(payload).eq("id", editingId));
+    }
     setSaving(false);
-    if (!insertError) {
-      setForm({ name: "", purchase_price: "", purchase_qty: "", unit: "kg", shipping_fee: "0", sub_unit_name: "", sub_unit_qty: "" });
-      setShowForm(false);
+    if (!err) {
+      setEditingId(null);
       reload();
     }
+  };
+
+  const remove = async (id) => {
+    if (!window.confirm("이 재료를 삭제할까요? 이 재료를 쓰는 메뉴 구성에서도 같이 사라져요.")) return;
+    setSaving(true);
+    await supabase.from("gagye_ingredients").delete().eq("id", id);
+    setSaving(false);
+    setEditingId(null);
+    reload();
   };
 
   if (loading) return <EmptyState text="불러오는 중..." />;
@@ -349,70 +382,199 @@ function IngredientsTab({ data }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {ingredients.length === 0 && <EmptyState text="등록된 재료가 없어요" />}
-      {ingredients.map((ing) => (
-        <div key={ing.id} style={{ background: "#fff", borderRadius: 14, padding: "14px 16px", boxShadow: "0 1px 2px rgba(16,24,43,0.05)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            <div style={{ fontSize: 14.5, fontWeight: 700 }}>{ing.name}</div>
-            <div style={{ fontSize: 12, color: "#64708A", marginTop: 2 }}>
-              {ing.purchase_qty}{ing.unit}당 {Number(ing.purchase_price).toLocaleString()}원
-              {ing.shipping_fee > 0 ? ` (배송비 ${Number(ing.shipping_fee).toLocaleString()}원)` : ""}
+      {ingredients.length === 0 && editingId !== "new" && <EmptyState text="등록된 재료가 없어요" />}
+      {ingredients.map((ing) =>
+        editingId === ing.id ? (
+          <IngredientForm key={ing.id} form={form} setForm={setForm} onCancel={() => setEditingId(null)} onSave={save} onDelete={() => remove(ing.id)} saving={saving} isNew={false} />
+        ) : (
+          <button
+            key={ing.id}
+            onClick={() => openEdit(ing)}
+            style={{ textAlign: "left", background: "#fff", border: "none", borderRadius: 14, padding: "14px 16px", boxShadow: "0 1px 2px rgba(16,24,43,0.05)", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}
+          >
+            <div>
+              <div style={{ fontSize: 14.5, fontWeight: 700 }}>{ing.name}</div>
+              <div style={{ fontSize: 12, color: "#64708A", marginTop: 2 }}>
+                {ing.purchase_qty}{ing.unit}당 {Number(ing.purchase_price).toLocaleString()}원
+                {ing.shipping_fee > 0 ? ` (배송비 ${Number(ing.shipping_fee).toLocaleString()}원)` : ""}
+              </div>
             </div>
-          </div>
-          <div style={{ fontSize: 14.5, fontWeight: 700, color: "#0A6E5D", textAlign: "right" }}>
-            {Math.round(ingredientUnitCost(ing)).toLocaleString()}원
-            <div style={{ fontSize: 10.5, color: "#A6AEC1", fontWeight: 600 }}>{ing.sub_unit_name ? `/${ing.sub_unit_name}` : `/${ing.unit}`}</div>
-          </div>
-        </div>
-      ))}
+            <div style={{ fontSize: 14.5, fontWeight: 700, color: "#0A6E5D", textAlign: "right" }}>
+              {Math.round(ingredientUnitCost(ing)).toLocaleString()}원
+              <div style={{ fontSize: 10.5, color: "#A6AEC1", fontWeight: 600 }}>{ing.sub_unit_name ? `/${ing.sub_unit_name}` : `/${ing.unit}`}</div>
+            </div>
+          </button>
+        )
+      )}
 
-      {showForm ? (
-        <div style={{ background: "#fff", borderRadius: 14, padding: 16, boxShadow: "0 1px 2px rgba(16,24,43,0.05)", display: "flex", flexDirection: "column", gap: 8 }}>
-          <input placeholder="재료명" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={inputStyle} />
-          <div style={{ display: "flex", gap: 8 }}>
-            <input placeholder="구매가" type="number" value={form.purchase_price} onChange={(e) => setForm({ ...form, purchase_price: e.target.value })} style={inputStyle} />
-            <input placeholder="구매수량" type="number" value={form.purchase_qty} onChange={(e) => setForm({ ...form, purchase_qty: e.target.value })} style={inputStyle} />
-            <input placeholder="단위(kg,개..)" value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} style={{ ...inputStyle, maxWidth: 90 }} />
-          </div>
-          <input placeholder="배송비 (없으면 0)" type="number" value={form.shipping_fee} onChange={(e) => setForm({ ...form, shipping_fee: e.target.value })} style={inputStyle} />
-          <div style={{ display: "flex", gap: 8 }}>
-            <input placeholder="조리단위명 (예: g, 선택)" value={form.sub_unit_name} onChange={(e) => setForm({ ...form, sub_unit_name: e.target.value })} style={inputStyle} />
-            <input placeholder="환산값 (예: 1000)" type="number" value={form.sub_unit_qty} onChange={(e) => setForm({ ...form, sub_unit_qty: e.target.value })} style={inputStyle} />
-          </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-            <button onClick={() => setShowForm(false)} style={secondaryBtnStyle}>취소</button>
-            <button onClick={save} disabled={saving} style={primaryBtnStyle}>{saving ? "저장 중..." : "저장"}</button>
-          </div>
-        </div>
+      {editingId === "new" ? (
+        <IngredientForm form={form} setForm={setForm} onCancel={() => setEditingId(null)} onSave={save} saving={saving} isNew={true} />
       ) : (
-        <button onClick={() => setShowForm(true)} style={dashedBtnStyle}>+ 재료 등록</button>
+        <button onClick={openNew} style={dashedBtnStyle}>+ 재료 등록</button>
       )}
     </div>
   );
 }
 
+function IngredientForm({ form, setForm, onCancel, onSave, onDelete, saving, isNew }) {
+  return (
+    <div style={{ background: "#fff", borderRadius: 14, padding: 16, boxShadow: "0 1px 2px rgba(16,24,43,0.05)", display: "flex", flexDirection: "column", gap: 8 }}>
+      <input placeholder="재료명" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={inputStyle} />
+      <div style={{ display: "flex", gap: 8 }}>
+        <input placeholder="구매가" type="number" value={form.purchase_price} onChange={(e) => setForm({ ...form, purchase_price: e.target.value })} style={inputStyle} />
+        <input placeholder="구매수량" type="number" value={form.purchase_qty} onChange={(e) => setForm({ ...form, purchase_qty: e.target.value })} style={inputStyle} />
+        <input placeholder="단위(kg,개..)" value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} style={{ ...inputStyle, maxWidth: 90 }} />
+      </div>
+      <input placeholder="배송비 (없으면 0)" type="number" value={form.shipping_fee} onChange={(e) => setForm({ ...form, shipping_fee: e.target.value })} style={inputStyle} />
+      <div style={{ display: "flex", gap: 8 }}>
+        <input placeholder="조리단위명 (예: g, 선택)" value={form.sub_unit_name} onChange={(e) => setForm({ ...form, sub_unit_name: e.target.value })} style={inputStyle} />
+        <input placeholder="환산값 (예: 1000)" type="number" value={form.sub_unit_qty} onChange={(e) => setForm({ ...form, sub_unit_qty: e.target.value })} style={inputStyle} />
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+        {!isNew && (
+          <button onClick={onDelete} disabled={saving} style={{ ...secondaryBtnStyle, color: "#FF6A45", borderColor: "#FFD9CC", flex: "0 0 auto", padding: "11px 14px" }}>삭제</button>
+        )}
+        <button onClick={onCancel} style={secondaryBtnStyle}>취소</button>
+        <button onClick={onSave} disabled={saving} style={primaryBtnStyle}>{saving ? "저장 중..." : "저장"}</button>
+      </div>
+    </div>
+  );
+}
+
 function MenuTab({ data }) {
-  const { menus, menuIngredients, ingredientsById, loading, error } = data;
+  const { menus, menuIngredients, ingredients, ingredientsById, loading, error, reload } = data;
+  const [editingId, setEditingId] = useState(null); // null | "new" | menu.id
+  const [name, setName] = useState("");
+  const [rows, setRows] = useState([]); // [{ingredient_id, amount_used, divide_by, unit}]
+  const [saving, setSaving] = useState(false);
+
+  const openNew = () => {
+    setName("");
+    setRows([{ ingredient_id: ingredients[0]?.id || "", amount_used: "", divide_by: "1", unit: "" }]);
+    setEditingId("new");
+  };
+
+  const openEdit = (menu) => {
+    const items = menuIngredients.filter((mi) => mi.menu_id === menu.id);
+    setName(menu.name);
+    setRows(
+      items.length
+        ? items.map((mi) => ({ ingredient_id: mi.ingredient_id, amount_used: String(mi.amount_used), divide_by: String(mi.divide_by ?? 1), unit: mi.unit || "" }))
+        : [{ ingredient_id: ingredients[0]?.id || "", amount_used: "", divide_by: "1", unit: "" }]
+    );
+    setEditingId(menu.id);
+  };
+
+  const addRow = () => setRows([...rows, { ingredient_id: ingredients[0]?.id || "", amount_used: "", divide_by: "1", unit: "" }]);
+  const removeRow = (idx) => setRows(rows.filter((_, i) => i !== idx));
+  const updateRow = (idx, patch) => setRows(rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
+
+  const save = async () => {
+    if (!name) return;
+    setSaving(true);
+    const validRows = rows.filter((r) => r.ingredient_id && r.amount_used);
+    let menuId = editingId;
+    if (editingId === "new") {
+      const { data: userData } = await supabase.auth.getUser();
+      const { data: inserted, error: err } = await supabase.from("gagye_menus").insert({ user_id: userData.user.id, name }).select().single();
+      if (err) { setSaving(false); return; }
+      menuId = inserted.id;
+    } else {
+      await supabase.from("gagye_menus").update({ name }).eq("id", editingId);
+      await supabase.from("gagye_menu_ingredients").delete().eq("menu_id", editingId);
+    }
+    if (validRows.length > 0) {
+      const { data: userData } = await supabase.auth.getUser();
+      await supabase.from("gagye_menu_ingredients").insert(
+        validRows.map((r) => ({
+          menu_id: menuId,
+          ingredient_id: r.ingredient_id,
+          user_id: userData.user.id,
+          amount_used: Number(r.amount_used),
+          divide_by: Number(r.divide_by) || 1,
+          unit: r.unit || null,
+        }))
+      );
+    }
+    setSaving(false);
+    setEditingId(null);
+    reload();
+  };
+
+  const remove = async (id) => {
+    if (!window.confirm("이 메뉴를 삭제할까요?")) return;
+    setSaving(true);
+    await supabase.from("gagye_menus").delete().eq("id", id);
+    setSaving(false);
+    setEditingId(null);
+    reload();
+  };
 
   if (loading) return <EmptyState text="불러오는 중..." />;
   if (error) return <EmptyState text={`불러오기 실패: ${error}`} />;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {menus.length === 0 && <EmptyState text="등록된 메뉴가 없어요" />}
+      {menus.length === 0 && editingId !== "new" && <EmptyState text="등록된 메뉴가 없어요" />}
       {menus.map((menu) => {
+        if (editingId === menu.id) {
+          return (
+            <MenuForm key={menu.id} name={name} setName={setName} rows={rows} ingredients={ingredients} addRow={addRow} removeRow={removeRow} updateRow={updateRow} onCancel={() => setEditingId(null)} onSave={save} onDelete={() => remove(menu.id)} saving={saving} isNew={false} />
+          );
+        }
         const items = menuIngredients.filter((mi) => mi.menu_id === menu.id);
         const cost = computeMenuCost(menu.id, menuIngredients, ingredientsById);
         return (
-          <div key={menu.id} style={{ background: "#fff", borderRadius: 14, padding: "14px 16px", boxShadow: "0 1px 2px rgba(16,24,43,0.05)" }}>
+          <button
+            key={menu.id}
+            onClick={() => openEdit(menu)}
+            style={{ textAlign: "left", width: "100%", background: "#fff", border: "none", borderRadius: 14, padding: "14px 16px", boxShadow: "0 1px 2px rgba(16,24,43,0.05)", cursor: "pointer" }}
+          >
             <div style={{ fontSize: 14.5, fontWeight: 700, marginBottom: 6 }}>{menu.name}</div>
             <div style={{ fontSize: 12, color: "#64708A", marginBottom: 6 }}>
               {items.map((i) => ingredientsById[i.ingredient_id]?.name).filter(Boolean).join(" · ") || "구성 재료 없음"}
             </div>
             <div style={{ fontSize: 13.5, fontWeight: 700, color: "#0A6E5D" }}>원가 {Math.round(cost).toLocaleString()}원</div>
-          </div>
+          </button>
         );
       })}
+
+      {editingId === "new" ? (
+        <MenuForm name={name} setName={setName} rows={rows} ingredients={ingredients} addRow={addRow} removeRow={removeRow} updateRow={updateRow} onCancel={() => setEditingId(null)} onSave={save} saving={saving} isNew={true} />
+      ) : (
+        <button onClick={openNew} style={dashedBtnStyle}>+ 메뉴 등록</button>
+      )}
+    </div>
+  );
+}
+
+function MenuForm({ name, setName, rows, ingredients, addRow, removeRow, updateRow, onCancel, onSave, onDelete, saving, isNew }) {
+  return (
+    <div style={{ background: "#fff", borderRadius: 14, padding: 16, boxShadow: "0 1px 2px rgba(16,24,43,0.05)", display: "flex", flexDirection: "column", gap: 10 }}>
+      <input placeholder="메뉴명" value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
+
+      <div style={{ fontSize: 12.5, color: "#64708A", fontWeight: 600 }}>구성 재료</div>
+      {rows.map((r, idx) => (
+        <div key={idx} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <select value={r.ingredient_id} onChange={(e) => updateRow(idx, { ingredient_id: e.target.value })} style={{ ...inputStyle, flex: 2 }}>
+            {ingredients.map((ing) => (
+              <option key={ing.id} value={ing.id}>{ing.name}</option>
+            ))}
+          </select>
+          <input placeholder="사용량" type="number" value={r.amount_used} onChange={(e) => updateRow(idx, { amount_used: e.target.value })} style={{ ...inputStyle, flex: 1 }} />
+          <input placeholder="단위" value={r.unit} onChange={(e) => updateRow(idx, { unit: e.target.value })} style={{ ...inputStyle, flex: 1 }} />
+          <button onClick={() => removeRow(idx)} style={{ border: "none", background: "transparent", color: "#FF6A45", fontSize: 18, cursor: "pointer", padding: "0 4px" }}>×</button>
+        </div>
+      ))}
+      <button onClick={addRow} style={{ ...dashedBtnStyle, padding: "9px 0", fontSize: 12.5 }}>+ 재료 추가</button>
+
+      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+        {!isNew && (
+          <button onClick={onDelete} disabled={saving} style={{ ...secondaryBtnStyle, color: "#FF6A45", borderColor: "#FFD9CC", flex: "0 0 auto", padding: "11px 14px" }}>삭제</button>
+        )}
+        <button onClick={onCancel} style={secondaryBtnStyle}>취소</button>
+        <button onClick={onSave} disabled={saving} style={primaryBtnStyle}>{saving ? "저장 중..." : "저장"}</button>
+      </div>
     </div>
   );
 }
