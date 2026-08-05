@@ -219,11 +219,7 @@ function HomeScreen({ goTo }) {
 
 /* ───────────────────────── 장부 상세 (Supabase 연동) ───────────────────────── */
 
-const CHANNELS = [
-  { id: "coupang", label: "쿠팡이츠", fee: 9.8 },
-  { id: "baemin", label: "배달의민족", fee: 6.8 },
-  { id: "custom", label: "직접입력", fee: null },
-];
+const emptyChannelForm = { name: "", fee_percent: "", delivery_fee: "0", card_fee_percent: "0" };
 
 const GAGYE_TABS = [
   { id: "ingredients", label: "재료" },
@@ -293,23 +289,26 @@ function useGagyeData() {
   const [ingredients, setIngredients] = useState([]);
   const [menus, setMenus] = useState([]);
   const [menuIngredients, setMenuIngredients] = useState([]);
+  const [channels, setChannels] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   const reload = async () => {
     setLoading(true);
     setError(null);
-    const [ingRes, menuRes, miRes] = await Promise.all([
+    const [ingRes, menuRes, miRes, chRes] = await Promise.all([
       supabase.from("gagye_ingredients").select("*").order("sort_order", { ascending: true }),
       supabase.from("gagye_menus").select("*").order("sort_order", { ascending: true }),
       supabase.from("gagye_menu_ingredients").select("*"),
+      supabase.from("gagye_channels").select("*").order("created_at", { ascending: true }),
     ]);
-    if (ingRes.error || menuRes.error || miRes.error) {
-      setError((ingRes.error || menuRes.error || miRes.error).message);
+    if (ingRes.error || menuRes.error || miRes.error || chRes.error) {
+      setError((ingRes.error || menuRes.error || miRes.error || chRes.error).message);
     } else {
       setIngredients(ingRes.data || []);
       setMenus(menuRes.data || []);
       setMenuIngredients(miRes.data || []);
+      setChannels(chRes.data || []);
     }
     setLoading(false);
   };
@@ -324,7 +323,7 @@ function useGagyeData() {
     return map;
   }, [ingredients]);
 
-  return { ingredients, menus, menuIngredients, ingredientsById, loading, error, reload };
+  return { ingredients, menus, menuIngredients, channels, ingredientsById, loading, error, reload };
 }
 
 function EmptyState({ text }) {
@@ -605,12 +604,16 @@ function MenuForm({ name, setName, price, setPrice, rows, ingredients, addRow, r
 }
 
 function ProfitTab({ data }) {
-  const { menus, menuIngredients, ingredientsById, loading, error } = data;
+  const { menus, menuIngredients, ingredientsById, channels, loading, error, reload } = data;
   const [cart, setCart] = useState({}); // menuId -> { qty, price }
   const [discountType, setDiscountType] = useState("percent"); // percent | amount
   const [discount, setDiscount] = useState(0);
-  const [channelId, setChannelId] = useState("coupang");
-  const [customFee, setCustomFee] = useState(5);
+  const [channelId, setChannelId] = useState(null);
+  const [managingChannels, setManagingChannels] = useState(false);
+
+  React.useEffect(() => {
+    if (!channelId && channels.length > 0) setChannelId(channels[0].id);
+  }, [channels, channelId]);
 
   if (loading) return <EmptyState text="불러오는 중..." />;
   if (error) return <EmptyState text={`불러오기 실패: ${error}`} />;
@@ -637,9 +640,11 @@ function ProfitTab({ data }) {
     discountType === "percent"
       ? Math.round(totalPrice * (1 - discount / 100))
       : Math.max(0, Math.round(totalPrice - discount));
-  const channel = CHANNELS.find((c) => c.id === channelId);
-  const fee = channelId === "custom" ? customFee : channel.fee;
-  const feeAmount = Math.round((discountedPrice * fee) / 100);
+
+  const channel = channels.find((c) => c.id === channelId);
+  const percentFee = channel ? Number(channel.fee_percent || 0) + Number(channel.card_fee_percent || 0) : 0;
+  const flatFee = channel ? Number(channel.delivery_fee || 0) : 0;
+  const feeAmount = Math.round((discountedPrice * percentFee) / 100) + flatFee;
   const net = discountedPrice - Math.round(totalCost) - feeAmount;
   const marginRate = discountedPrice > 0 ? ((net / discountedPrice) * 100).toFixed(1) : 0;
 
@@ -686,7 +691,7 @@ function ProfitTab({ data }) {
           </div>
 
           <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 6, fontWeight: 600 }}>할인</div>
-          <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+          <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
             <div style={{ display: "flex", background: "#F3F6FB", borderRadius: 10, padding: 3, flex: 1 }}>
               {[
                 { id: "percent", label: "정률(%)" },
@@ -711,24 +716,37 @@ function ProfitTab({ data }) {
             <input type="number" value={discount} onChange={(e) => setDiscount(Number(e.target.value) || 0)} style={{ ...inputStyle, flex: 1 }} />
           </div>
 
-          <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 6, fontWeight: 600 }}>판매 채널</div>
-          <div style={{ display: "flex", gap: 6 }}>
-            {CHANNELS.map((c) => {
-              const sel = c.id === channelId;
-              return (
-                <button key={c.id} onClick={() => setChannelId(c.id)} style={{ flex: 1, fontSize: 12.5, fontWeight: 700, padding: "9px 0", borderRadius: 10, border: "none", cursor: "pointer", background: sel ? "#0A6E5D" : "#F3F6FB", color: sel ? "#fff" : "#64708A" }}>
-                  {c.label}
-                </button>
-              );
-            })}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+            <div style={{ fontSize: 12.5, color: "#64708A", fontWeight: 600 }}>판매 채널</div>
+            <button onClick={() => setManagingChannels(!managingChannels)} style={{ background: "none", border: "none", color: "#0A6E5D", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+              {managingChannels ? "닫기" : "채널 관리"}
+            </button>
           </div>
-          {channelId === "custom" && (
-            <input type="number" value={customFee} onChange={(e) => setCustomFee(Number(e.target.value) || 0)} style={{ ...inputStyle, marginTop: 10 }} />
+
+          {channels.length > 0 && !managingChannels && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {channels.map((c) => {
+                const sel = c.id === channelId;
+                return (
+                  <button key={c.id} onClick={() => setChannelId(c.id)} style={{ padding: "9px 14px", fontSize: 12.5, fontWeight: 700, borderRadius: 10, border: "none", cursor: "pointer", background: sel ? "#0A6E5D" : "#F3F6FB", color: sel ? "#fff" : "#64708A" }}>
+                    {c.name}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {managingChannels && <ChannelManager channels={channels} reload={reload} />}
+          {!managingChannels && channels.length === 0 && (
+            <div>
+              <EmptyState text="등록된 채널이 없어요" />
+              <ChannelManager channels={channels} reload={reload} />
+            </div>
           )}
         </div>
       )}
 
-      {cartEntries.length > 0 && (
+      {cartEntries.length > 0 && channel && (
         <div style={{ background: "#10182B", borderRadius: 16, padding: 20, marginTop: 12, color: "#fff" }}>
           <div style={{ fontSize: 12.5, color: "#9AA5BD", marginBottom: 4 }}>할인 적용 후 예상 순이익</div>
           <div style={{ fontSize: 28, fontWeight: 800 }}>{net.toLocaleString()}원</div>
@@ -739,6 +757,113 @@ function ProfitTab({ data }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function ChannelManager({ channels, reload }) {
+  const [editingId, setEditingId] = useState(null); // null | "new" | channel.id
+  const [form, setForm] = useState(emptyChannelForm);
+  const [saving, setSaving] = useState(false);
+
+  const openNew = () => {
+    setForm(emptyChannelForm);
+    setEditingId("new");
+  };
+  const openEdit = (c) => {
+    setForm({
+      name: c.name,
+      fee_percent: String(c.fee_percent ?? ""),
+      delivery_fee: String(c.delivery_fee ?? 0),
+      card_fee_percent: String(c.card_fee_percent ?? 0),
+    });
+    setEditingId(c.id);
+  };
+
+  const save = async () => {
+    if (!form.name) return;
+    setSaving(true);
+    const payload = {
+      name: form.name,
+      fee_percent: Number(form.fee_percent) || 0,
+      delivery_fee: Number(form.delivery_fee) || 0,
+      card_fee_percent: Number(form.card_fee_percent) || 0,
+    };
+    let err;
+    if (editingId === "new") {
+      const { data: userData } = await supabase.auth.getUser();
+      ({ error: err } = await supabase.from("gagye_channels").insert({ ...payload, user_id: userData.user.id }));
+    } else {
+      ({ error: err } = await supabase.from("gagye_channels").update(payload).eq("id", editingId));
+    }
+    setSaving(false);
+    if (!err) {
+      setEditingId(null);
+      reload();
+    }
+  };
+
+  const remove = async (id) => {
+    if (!window.confirm("이 채널을 삭제할까요?")) return;
+    setSaving(true);
+    await supabase.from("gagye_channels").delete().eq("id", id);
+    setSaving(false);
+    setEditingId(null);
+    reload();
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
+      {channels.map((c) =>
+        editingId === c.id ? (
+          <ChannelForm key={c.id} form={form} setForm={setForm} onCancel={() => setEditingId(null)} onSave={save} onDelete={() => remove(c.id)} saving={saving} isNew={false} />
+        ) : (
+          <button
+            key={c.id}
+            onClick={() => openEdit(c)}
+            style={{ textAlign: "left", background: "#F3F6FB", border: "none", borderRadius: 10, padding: "10px 12px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}
+          >
+            <span style={{ fontSize: 13, fontWeight: 700 }}>{c.name}</span>
+            <span style={{ fontSize: 11.5, color: "#64708A" }}>
+              중개 {c.fee_percent}% · 카드 {c.card_fee_percent || 0}% · 배달비 {Number(c.delivery_fee || 0).toLocaleString()}원
+            </span>
+          </button>
+        )
+      )}
+      {editingId === "new" ? (
+        <ChannelForm form={form} setForm={setForm} onCancel={() => setEditingId(null)} onSave={save} saving={saving} isNew={true} />
+      ) : (
+        <button onClick={openNew} style={{ ...dashedBtnStyle, padding: "10px 0", fontSize: 12.5 }}>+ 채널 추가</button>
+      )}
+    </div>
+  );
+}
+
+function ChannelForm({ form, setForm, onCancel, onSave, onDelete, saving, isNew }) {
+  return (
+    <div style={{ background: "#fff", border: "1.5px solid #E3E9F3", borderRadius: 12, padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
+      <input placeholder="채널명 (예: 쿠팡이츠)" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={inputStyle} />
+      <div style={{ display: "flex", gap: 8 }}>
+        <label style={{ flex: 1 }}>
+          <div style={{ fontSize: 10.5, color: "#64708A", marginBottom: 3 }}>중개수수료(%)</div>
+          <input type="number" value={form.fee_percent} onChange={(e) => setForm({ ...form, fee_percent: e.target.value })} style={inputStyle} />
+        </label>
+        <label style={{ flex: 1 }}>
+          <div style={{ fontSize: 10.5, color: "#64708A", marginBottom: 3 }}>카드수수료(%)</div>
+          <input type="number" value={form.card_fee_percent} onChange={(e) => setForm({ ...form, card_fee_percent: e.target.value })} style={inputStyle} />
+        </label>
+        <label style={{ flex: 1 }}>
+          <div style={{ fontSize: 10.5, color: "#64708A", marginBottom: 3 }}>배달비 부담(원)</div>
+          <input type="number" value={form.delivery_fee} onChange={(e) => setForm({ ...form, delivery_fee: e.target.value })} style={inputStyle} />
+        </label>
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        {!isNew && (
+          <button onClick={onDelete} disabled={saving} style={{ ...secondaryBtnStyle, color: "#FF6A45", borderColor: "#FFD9CC", flex: "0 0 auto", padding: "9px 12px" }}>삭제</button>
+        )}
+        <button onClick={onCancel} style={{ ...secondaryBtnStyle, padding: "9px 0" }}>취소</button>
+        <button onClick={onSave} disabled={saving} style={{ ...primaryBtnStyle, padding: "9px 0" }}>{saving ? "저장 중..." : "저장"}</button>
+      </div>
     </div>
   );
 }
