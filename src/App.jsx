@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { supabase } from "./supabaseClient";
+import html2canvas from "html2canvas";
 import {
   Calculator,
   Users,
@@ -1246,6 +1247,7 @@ function ScheduleTab({ paylog }) {
   if (employees.length === 0) return <EmptyState text="먼저 직원을 등록해주세요" />;
 
   const total = daysInMonth(year, month);
+  const firstWeekday = new Date(year, month - 1, 1).getDay(); // 0=일 ~ 6=토
   const totalHours = Object.values(rows).reduce((sum, r) => sum + (Number(r.hours) || 0), 0);
 
   return (
@@ -1265,20 +1267,38 @@ function ScheduleTab({ paylog }) {
       {loading ? (
         <EmptyState text="불러오는 중..." />
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {Array.from({ length: total }, (_, i) => i + 1).map((day) => (
-            <div key={day} style={{ display: "flex", alignItems: "center", gap: 10, background: "#fff", borderRadius: 10, padding: "8px 12px", boxShadow: "0 1px 2px rgba(16,24,43,0.05)" }}>
-              <div style={{ width: 32, fontSize: 13, fontWeight: 700, color: "#64708A" }}>{day}일</div>
-              <input
-                type="number"
-                value={rows[day]?.hours || ""}
-                placeholder="0"
-                onChange={(e) => updateHour(day, e.target.value)}
-                style={{ ...inputStyle, textAlign: "right" }}
-              />
-              <span style={{ fontSize: 12, color: "#A6AEC1" }}>시간</span>
-            </div>
-          ))}
+        <div style={{ background: "#fff", borderRadius: 14, padding: 10, boxShadow: "0 1px 2px rgba(16,24,43,0.05)" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 4 }}>
+            {["일", "월", "화", "수", "목", "금", "토"].map((d, i) => (
+              <div key={d} style={{ textAlign: "center", fontSize: 11, fontWeight: 700, color: i === 0 ? "#FF6A45" : i === 6 ? "#3B5BDB" : "#64708A", padding: "4px 0" }}>
+                {d}
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
+            {Array.from({ length: firstWeekday }, (_, i) => (
+              <div key={`pad-${i}`} />
+            ))}
+            {Array.from({ length: total }, (_, i) => i + 1).map((day) => {
+              const dow = (firstWeekday + (day - 1)) % 7;
+              return (
+                <div key={day} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                  <span style={{ fontSize: 10.5, fontWeight: 700, color: dow === 0 ? "#FF6A45" : dow === 6 ? "#3B5BDB" : "#64708A" }}>{day}</span>
+                  <input
+                    type="number"
+                    value={rows[day]?.hours || ""}
+                    placeholder="-"
+                    onChange={(e) => updateHour(day, e.target.value)}
+                    style={{
+                      width: "100%", boxSizing: "border-box", padding: "6px 2px", borderRadius: 8,
+                      border: "1.5px solid #E3E9F3", fontSize: 12, fontWeight: 700, textAlign: "center",
+                      background: rows[day]?.hours ? "#E4F3EF" : "#fff",
+                    }}
+                  />
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -1324,6 +1344,8 @@ function PayrollTab({ paylog }) {
   const [hoursByEmployee, setHoursByEmployee] = useState({});
   const [juhyuByEmployee, setJuhyuByEmployee] = useState({});
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const exportRef = React.useRef(null);
 
   React.useEffect(() => {
     const load = async () => {
@@ -1371,32 +1393,51 @@ function PayrollTab({ paylog }) {
   const totalNet = rows.reduce((sum, r) => sum + r.net, 0);
   const totalGross = rows.reduce((sum, r) => sum + r.gross, 0);
 
+  const exportImage = async () => {
+    if (!exportRef.current) return;
+    setExporting(true);
+    try {
+      const canvas = await html2canvas(exportRef.current, { backgroundColor: "#F3F6FB", scale: 2 });
+      const link = document.createElement("a");
+      link.download = `급여_${year}년${month}월.png`;
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         <input type="number" value={year} onChange={(e) => setYear(Number(e.target.value) || now.getFullYear())} style={{ ...inputStyle, flex: 1 }} />
         <input type="number" value={month} min="1" max="12" onChange={(e) => setMonth(Number(e.target.value) || 1)} style={{ ...inputStyle, flex: 1 }} />
+        <button onClick={exportImage} disabled={exporting} style={{ ...primaryBtnStyle, flex: 1, padding: "11px 0" }}>
+          {exporting ? "저장 중..." : "이미지 저장"}
+        </button>
       </div>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-        <StatBox label={`${year}년 ${month}월 총 인건비(세전)`} value={`${totalGross.toLocaleString()}원`} />
-        <StatBox label="실지급 합계" value={`${totalNet.toLocaleString()}원`} />
-      </div>
+      <div ref={exportRef} style={{ background: "#F3F6FB", padding: 4 }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+          <StatBox label={`${year}년 ${month}월 총 인건비(세전)`} value={`${totalGross.toLocaleString()}원`} />
+          <StatBox label="실지급 합계" value={`${totalNet.toLocaleString()}원`} />
+        </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {rows.map(({ emp, hours, base, juhyu, gross, deduction, net, deductRate }) => (
-          <div key={emp.id} style={{ background: "#fff", borderRadius: 14, padding: "14px 16px", boxShadow: "0 1px 2px rgba(16,24,43,0.05)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-              <span style={{ fontSize: 14, fontWeight: 700 }}>{emp.name}</span>
-              <span style={{ fontSize: 12, color: "#64708A" }}>{emp.pay_type === "hourly" ? `${hours}시간` : "월급제"}</span>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {rows.map(({ emp, hours, base, juhyu, gross, deduction, net, deductRate }) => (
+            <div key={emp.id} style={{ background: "#fff", borderRadius: 14, padding: "14px 16px", boxShadow: "0 1px 2px rgba(16,24,43,0.05)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                <span style={{ fontSize: 14, fontWeight: 700 }}>{emp.name}</span>
+                <span style={{ fontSize: 12, color: "#64708A" }}>{emp.pay_type === "hourly" ? `${hours}시간` : "월급제"}</span>
+              </div>
+              <div style={{ fontSize: 12.5, color: "#64708A" }}>
+                기본급 {base.toLocaleString()}원{juhyu > 0 ? ` · 주휴수당 ${Math.round(juhyu).toLocaleString()}원` : ""}
+                {deductRate > 0 ? ` · 공제 ${deductRate.toFixed(1)}% (${deduction.toLocaleString()}원)` : ""}
+              </div>
+              <div style={{ fontSize: 15, fontWeight: 800, color: "#0A6E5D", marginTop: 4 }}>실수령 {net.toLocaleString()}원</div>
             </div>
-            <div style={{ fontSize: 12.5, color: "#64708A" }}>
-              기본급 {base.toLocaleString()}원{juhyu > 0 ? ` · 주휴수당 ${Math.round(juhyu).toLocaleString()}원` : ""}
-              {deductRate > 0 ? ` · 공제 ${deductRate.toFixed(1)}% (${deduction.toLocaleString()}원)` : ""}
-            </div>
-            <div style={{ fontSize: 15, fontWeight: 800, color: "#0A6E5D", marginTop: 4 }}>실수령 {net.toLocaleString()}원</div>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 14, fontSize: 11.5, color: "#A6AEC1", lineHeight: 1.5 }}>
