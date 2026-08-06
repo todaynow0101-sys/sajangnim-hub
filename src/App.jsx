@@ -1340,21 +1340,11 @@ function ScheduleTab({ paylog }) {
   };
 
   // 지난달 근무 패턴을 요일 기준으로 이번 달에 복사 (일요일→일요일, 화요일→화요일 ...)
-  const copyLastMonth = async () => {
-    if (!employeeId) return;
-    setCopying(true);
-    setSaveError("");
-    let prevYear = year, prevMonth = month - 1;
-    if (prevMonth === 0) { prevMonth = 12; prevYear = year - 1; }
-    const { data, error: err } = await supabase.from("schedules").select("day_of_month, hours").eq("employee_id", employeeId).eq("year", prevYear).eq("month", prevMonth);
-    setCopying(false);
-    if (err) { setSaveError(err.message); return; }
-    if (!data || data.length === 0) { setSaveError("지난달 근무 기록이 없어요"); return; }
-
-    // 요일별로 가장 많이 나온 근무시간을 대표값으로
+  // 요일별 근무시간 중 가장 많이 나온 값을 대표값으로 추출
+  const buildWeekdayHours = (data, refYear, refMonth) => {
     const byWeekday = {};
     data.forEach((r) => {
-      const dow = new Date(prevYear, prevMonth - 1, r.day_of_month).getDay();
+      const dow = new Date(refYear, refMonth - 1, r.day_of_month).getDay();
       byWeekday[dow] = byWeekday[dow] || {};
       const key = String(r.hours);
       byWeekday[dow][key] = (byWeekday[dow][key] || 0) + 1;
@@ -1365,18 +1355,59 @@ function ScheduleTab({ paylog }) {
       Object.entries(counts).forEach(([h, c]) => { if (c > bestCount) { best = h; bestCount = c; } });
       weekdayHours[dow] = best;
     });
+    return weekdayHours;
+  };
+
+  // 전체 직원의 지난달 요일별 근무 패턴을 이번 달에 맞춰 바로 저장
+  const copyLastMonthAllEmployees = async () => {
+    setCopying(true);
+    setSaveError("");
+    let prevYear = year, prevMonth = month - 1;
+    if (prevMonth === 0) { prevMonth = 12; prevYear = year - 1; }
+
+    const { data: userData, error: authErr } = await supabase.auth.getUser();
+    if (authErr || !userData?.user) {
+      setCopying(false);
+      setSaveError("로그인 정보를 확인할 수 없어요. 다시 로그인해주세요.");
+      return;
+    }
 
     const total = daysInMonth(year, month);
-    setRows((prev) => {
-      const next = { ...prev };
+    let copiedCount = 0;
+
+    for (const emp of employees) {
+      const { data: prevData, error: prevErr } = await supabase
+        .from("schedules").select("day_of_month, hours")
+        .eq("employee_id", emp.id).eq("year", prevYear).eq("month", prevMonth);
+      if (prevErr || !prevData || prevData.length === 0) continue;
+
+      const weekdayHours = buildWeekdayHours(prevData, prevYear, prevMonth);
+
+      const { data: curData } = await supabase
+        .from("schedules").select("id, day_of_month")
+        .eq("employee_id", emp.id).eq("year", year).eq("month", month);
+      const existingByDay = {};
+      (curData || []).forEach((r) => { existingByDay[r.day_of_month] = r.id; });
+
       for (let day = 1; day <= total; day++) {
         const dow = new Date(year, month - 1, day).getDay();
-        if (weekdayHours[dow] != null && Number(weekdayHours[dow]) > 0) {
-          next[day] = { id: prev[day]?.id, hours: weekdayHours[dow] };
+        if (weekdayHours[dow] == null || Number(weekdayHours[dow]) <= 0) continue;
+        const hoursVal = Number(weekdayHours[dow]);
+        if (existingByDay[day]) {
+          await supabase.from("schedules").update({ hours: hoursVal }).eq("id", existingByDay[day]);
+        } else {
+          await supabase.from("schedules").insert({ employee_id: emp.id, user_id: userData.user.id, year, month, day_of_month: day, hours: hoursVal });
         }
       }
-      return next;
-    });
+      copiedCount += 1;
+    }
+
+    setCopying(false);
+    if (copiedCount === 0) {
+      setSaveError("지난달 근무 기록이 있는 직원이 없어요");
+    } else {
+      loadSchedule();
+    }
   };
 
   if (empLoading) return <EmptyState text="불러오는 중..." />;
@@ -1401,8 +1432,12 @@ function ScheduleTab({ paylog }) {
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
         <span style={{ fontSize: 12.5, color: "#64708A" }}>이번 달 합계 {totalHours}시간</span>
-        <button onClick={copyLastMonth} disabled={copying} style={{ background: "none", border: "none", color: "#0A6E5D", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-          {copying ? "불러오는 중..." : "지난달 복사"}
+        <button
+          onClick={() => { if (window.confirm("전체 직원의 지난달 요일별 근무 패턴을 이번 달에 복사할까요? 바로 저장돼요.")) copyLastMonthAllEmployees(); }}
+          disabled={copying}
+          style={{ background: "none", border: "none", color: "#0A6E5D", fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+        >
+          {copying ? "복사 중..." : "전체 직원 지난달 복사"}
         </button>
       </div>
 
@@ -1537,16 +1572,47 @@ function PayrollTab({ paylog }) {
   const totalNet = rows.reduce((sum, r) => sum + r.net, 0);
   const totalGross = rows.reduce((sum, r) => sum + r.gross, 0);
 
+  const [exportError, setExportError] = useState("");
+
   const exportImage = async () => {
     if (!exportRef.current) return;
     setExporting(true);
+    setExportError("");
     try {
-      const canvas = await html2canvas(exportRef.current, { backgroundColor: "#F3F6FB", scale: 2 });
-      const link = document.createElement("a");
-      link.download = `급여_${year}년${month}월.png`;
-      link.href = canvas.toDataURL("image/png");
-      link.click();
-    } finally {
+      const canvas = await html2canvas(exportRef.current, { backgroundColor: "#F3F6FB", scale: 2, useCORS: true });
+      const fileName = `급여_${year}년${month}월.png`;
+
+      canvas.toBlob(async (blob) => {
+        if (!blob) {
+          setExportError("이미지 생성에 실패했어요");
+          setExporting(false);
+          return;
+        }
+        const file = new File([blob], fileName, { type: "image/png" });
+
+        // 아이폰 사파리 등: 공유 시트로 "사진에 저장" 가능하게
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          try {
+            await navigator.share({ files: [file], title: fileName });
+          } catch (shareErr) {
+            // 사용자가 공유 취소한 경우는 에러 표시 안 함
+            if (shareErr?.name !== "AbortError") setExportError("공유 중 문제가 생겼어요. 다시 시도해주세요.");
+          }
+        } else {
+          // 데스크톱/그 외: 일반 다운로드
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.download = fileName;
+          link.href = url;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        }
+        setExporting(false);
+      }, "image/png");
+    } catch (err) {
+      setExportError(err?.message || "이미지 저장에 실패했어요");
       setExporting(false);
     }
   };
@@ -1560,6 +1626,7 @@ function PayrollTab({ paylog }) {
           {exporting ? "저장 중..." : "이미지 저장"}
         </button>
       </div>
+      {exportError && <div style={{ fontSize: 12.5, color: "#FF6A45", fontWeight: 600, marginBottom: 12 }}>{exportError}</div>}
 
       <div ref={exportRef} style={{ background: "#F3F6FB", padding: 4 }}>
         <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
