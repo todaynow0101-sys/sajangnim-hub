@@ -358,15 +358,21 @@ async function persistOrder(table, orderedItems) {
   await Promise.all(orderedItems.map((item, idx) => supabase.from(table).update({ sort_order: idx }).eq("id", item.id)));
 }
 
-function SortButtons({ onSortAsc, onSortDesc }) {
+function SortDropdown({ onSort }) {
   return (
-    <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, marginBottom: 2 }}>
-      <button onClick={onSortAsc} title="이름 오름차순" style={{ width: 30, height: 30, borderRadius: 8, border: "1.5px solid #E3E9F3", background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
-        <ArrowUpAZ size={14} color="#64708A" />
-      </button>
-      <button onClick={onSortDesc} title="이름 내림차순" style={{ width: 30, height: 30, borderRadius: 8, border: "1.5px solid #E3E9F3", background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
-        <ArrowDownAZ size={14} color="#64708A" />
-      </button>
+    <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 2 }}>
+      <select
+        defaultValue=""
+        onChange={(e) => {
+          if (e.target.value) onSort(e.target.value);
+          e.target.value = "";
+        }}
+        style={{ width: 110, boxSizing: "border-box", padding: "6px 8px", borderRadius: 8, border: "1.5px solid #E3E9F3", fontSize: 12, fontWeight: 600, color: "#64708A", background: "#fff" }}
+      >
+        <option value="" disabled>가격 정렬</option>
+        <option value="asc">오름차순</option>
+        <option value="desc">내림차순</option>
+      </select>
     </div>
   );
 }
@@ -453,7 +459,10 @@ function IngredientsTab({ data }) {
   };
 
   const applySort = async (dir) => {
-    const sorted = [...ingredients].sort((a, b) => (dir === "asc" ? a.name.localeCompare(b.name, "ko") : b.name.localeCompare(a.name, "ko")));
+    const sorted = [...ingredients].sort((a, b) => {
+      const diff = ingredientUnitCost(a) - ingredientUnitCost(b);
+      return dir === "asc" ? diff : -diff;
+    });
     await persistOrder("gagye_ingredients", sorted);
     reload();
   };
@@ -463,7 +472,7 @@ function IngredientsTab({ data }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {ingredients.length > 1 && <SortButtons onSortAsc={() => applySort("asc")} onSortDesc={() => applySort("desc")} />}
+      {ingredients.length > 1 && <SortDropdown onSort={applySort} />}
       {ingredients.length === 0 && editingId !== "new" && <EmptyState text="등록된 재료가 없어요" />}
       {ingredients.map((ing, idx) =>
         editingId === ing.id ? (
@@ -638,7 +647,10 @@ function MenuTab({ data }) {
   };
 
   const applySort = async (dir) => {
-    const sorted = [...menus].sort((a, b) => (dir === "asc" ? a.name.localeCompare(b.name, "ko") : b.name.localeCompare(a.name, "ko")));
+    const sorted = [...menus].sort((a, b) => {
+      const diff = Number(a.price || 0) - Number(b.price || 0);
+      return dir === "asc" ? diff : -diff;
+    });
     await persistOrder("gagye_menus", sorted);
     reload();
   };
@@ -648,7 +660,7 @@ function MenuTab({ data }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {menus.length > 1 && <SortButtons onSortAsc={() => applySort("asc")} onSortDesc={() => applySort("desc")} />}
+      {menus.length > 1 && <SortDropdown onSort={applySort} />}
       {menus.length === 0 && editingId !== "new" && <EmptyState text="등록된 메뉴가 없어요" />}
       {menus.map((menu, idx) => {
         if (editingId === menu.id) {
