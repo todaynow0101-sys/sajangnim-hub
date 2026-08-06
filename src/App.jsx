@@ -261,14 +261,33 @@ function ingredientUnitCost(ing) {
   return (Number(ing.purchase_price) + Number(ing.shipping_fee || 0)) / Number(ing.purchase_qty || 1);
 }
 
+// 대소문자·표기 차이 없이 같은 단위로 인식되도록 정규화 (G, ｇ, 그램 → g 등)
+const UNIT_ALIASES = {
+  kg: "kg", 킬로: "kg", 키로: "kg", 킬로그램: "kg",
+  g: "g", 그램: "g", 그람: "g",
+  mg: "mg",
+  l: "l", ℓ: "l", 리터: "l",
+  ml: "ml", 미리: "ml", 밀리: "ml", 밀리리터: "ml",
+};
+function normalizeUnit(u) {
+  if (!u) return u;
+  const key = String(u).trim().toLowerCase();
+  return UNIT_ALIASES[key] || key;
+}
+
+// 단위는 직접 입력 대신 이 목록에서 선택 (오타/대소문자 문제 원천 차단)
+const UNIT_OPTIONS = ["kg", "g", "mg", "l", "ml", "개", "팩", "봉지", "병", "모", "장", "판"];
+
 // 표준 단위 환산 (그램/밀리리터 기준값). 구매단위와 사용단위가 이 표에 둘 다 있으면 자동 환산.
-const UNIT_TO_BASE = { kg: 1000, g: 1, mg: 0.001, l: 1000, L: 1000, ml: 1 };
+const UNIT_TO_BASE = { kg: 1000, g: 1, mg: 0.001, l: 1000, ml: 1 };
 
 // fromUnit(구매단위) 1개가 toUnit(사용단위)으로 몇 개인지. 환산표에 없는 조합(개, 팩 등)은 1로 처리.
 function conversionFactor(fromUnit, toUnit) {
-  if (!fromUnit || !toUnit || fromUnit === toUnit) return 1;
-  const f = UNIT_TO_BASE[fromUnit];
-  const t = UNIT_TO_BASE[toUnit];
+  const from = normalizeUnit(fromUnit);
+  const to = normalizeUnit(toUnit);
+  if (!from || !to || from === to) return 1;
+  const f = UNIT_TO_BASE[from];
+  const t = UNIT_TO_BASE[to];
   if (f && t) return f / t;
   return 1;
 }
@@ -352,7 +371,7 @@ function SortButtons({ onSortAsc, onSortDesc }) {
   );
 }
 
-const emptyIngForm = { name: "", purchase_price: "", purchase_qty: "", unit: "kg", shipping_fee: "0", sub_unit_name: "", sub_unit_qty: "" };
+const emptyIngForm = { name: "", purchase_price: "", purchase_qty: "", unit: "kg", shipping_fee: "0" };
 
 function IngredientsTab({ data }) {
   const { ingredients, loading, error, reload } = data;
@@ -375,8 +394,6 @@ function IngredientsTab({ data }) {
       purchase_qty: String(ing.purchase_qty),
       unit: ing.unit,
       shipping_fee: String(ing.shipping_fee ?? 0),
-      sub_unit_name: ing.sub_unit_name || "",
-      sub_unit_qty: ing.sub_unit_qty ? String(ing.sub_unit_qty) : "",
     });
     setSaveError("");
     setEditingId(ing.id);
@@ -394,8 +411,6 @@ function IngredientsTab({ data }) {
       purchase_qty: Number(form.purchase_qty),
       unit: form.unit,
       shipping_fee: Number(form.shipping_fee) || 0,
-      sub_unit_name: form.sub_unit_name || null,
-      sub_unit_qty: form.sub_unit_qty ? Number(form.sub_unit_qty) : null,
     };
     let err;
     if (editingId === "new") {
@@ -497,16 +512,34 @@ function IngredientsTab({ data }) {
 function IngredientForm({ form, setForm, onCancel, onSave, onDelete, saving, isNew, error }) {
   return (
     <div style={{ background: "#fff", borderRadius: 14, padding: 16, boxShadow: "0 1px 2px rgba(16,24,43,0.05)", display: "flex", flexDirection: "column", gap: 8 }}>
-      <input placeholder="재료명" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={inputStyle} />
-      <div style={{ display: "flex", gap: 8 }}>
-        <input placeholder="구매가" type="number" value={form.purchase_price} onChange={(e) => setForm({ ...form, purchase_price: e.target.value })} style={inputStyle} />
-        <input placeholder="구매수량" type="number" value={form.purchase_qty} onChange={(e) => setForm({ ...form, purchase_qty: e.target.value })} style={inputStyle} />
-        <input placeholder="단위(kg,개..)" value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} style={{ ...inputStyle, maxWidth: 90 }} />
+      <div>
+        <div style={{ fontSize: 10.5, color: "#A6AEC1", fontWeight: 600, marginBottom: 3 }}>재료명</div>
+        <input placeholder="예: 삼겹살, 김치" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={inputStyle} />
       </div>
-      <input placeholder="배송비 (없으면 0)" type="number" value={form.shipping_fee} onChange={(e) => setForm({ ...form, shipping_fee: e.target.value })} style={inputStyle} />
       <div style={{ display: "flex", gap: 8 }}>
-        <input placeholder="조리단위명 (예: g, 선택)" value={form.sub_unit_name} onChange={(e) => setForm({ ...form, sub_unit_name: e.target.value })} style={inputStyle} />
-        <input placeholder="환산값 (예: 1000)" type="number" value={form.sub_unit_qty} onChange={(e) => setForm({ ...form, sub_unit_qty: e.target.value })} style={inputStyle} />
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 10.5, color: "#A6AEC1", fontWeight: 600, marginBottom: 3 }}>총 구매가</div>
+          <input placeholder="예: 60000" type="number" value={form.purchase_price} onChange={(e) => setForm({ ...form, purchase_price: e.target.value })} style={inputStyle} />
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 10.5, color: "#A6AEC1", fontWeight: 600, marginBottom: 3 }}>총 수량</div>
+          <input placeholder="예: 1500" type="number" value={form.purchase_qty} onChange={(e) => setForm({ ...form, purchase_qty: e.target.value })} style={inputStyle} />
+        </div>
+        <div style={{ width: 90 }}>
+          <div style={{ fontSize: 10.5, color: "#A6AEC1", fontWeight: 600, marginBottom: 3 }}>단위</div>
+          <select value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} style={inputStyle}>
+            {UNIT_OPTIONS.map((u) => (
+              <option key={u} value={u}>{u}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+      <div style={{ fontSize: 11, color: "#A6AEC1", marginTop: -4 }}>
+        박스·묶음으로 사셨으면 "총 구매가 ÷ 총 수량"이 되도록, 박스 안에 든 전체 개수(또는 kg)를 총 수량에 넣어주세요. 예: 6만원짜리 1박스에 1500개 들었으면 → 총 구매가 60000, 총 수량 1500, 단위 개
+      </div>
+      <div>
+        <div style={{ fontSize: 10.5, color: "#A6AEC1", fontWeight: 600, marginBottom: 3 }}>배송비 (없으면 0)</div>
+        <input placeholder="0" type="number" value={form.shipping_fee} onChange={(e) => setForm({ ...form, shipping_fee: e.target.value })} style={inputStyle} />
       </div>
       {error && <div style={{ fontSize: 12.5, color: "#FF6A45", fontWeight: 600 }}>{error}</div>}
       <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
@@ -532,7 +565,7 @@ function MenuTab({ data }) {
   const openNew = () => {
     setName("");
     setPrice("");
-    setRows([{ ingredient_id: ingredients[0]?.id || "", amount_used: "", divide_by: "1", unit: "" }]);
+    setRows([{ ingredient_id: ingredients[0]?.id || "", amount_used: "", divide_by: "1", unit: "g" }]);
     setEditingId("new");
   };
 
@@ -542,13 +575,13 @@ function MenuTab({ data }) {
     setPrice(menu.price ? String(menu.price) : "");
     setRows(
       items.length
-        ? items.map((mi) => ({ ingredient_id: mi.ingredient_id, amount_used: String(mi.amount_used), divide_by: String(mi.divide_by ?? 1), unit: mi.unit || "" }))
-        : [{ ingredient_id: ingredients[0]?.id || "", amount_used: "", divide_by: "1", unit: "" }]
+        ? items.map((mi) => ({ ingredient_id: mi.ingredient_id, amount_used: String(mi.amount_used), divide_by: String(mi.divide_by ?? 1), unit: mi.unit || "g" }))
+        : [{ ingredient_id: ingredients[0]?.id || "", amount_used: "", divide_by: "1", unit: "g" }]
     );
     setEditingId(menu.id);
   };
 
-  const addRow = () => setRows([...rows, { ingredient_id: ingredients[0]?.id || "", amount_used: "", divide_by: "1", unit: "" }]);
+  const addRow = () => setRows([...rows, { ingredient_id: ingredients[0]?.id || "", amount_used: "", divide_by: "1", unit: "g" }]);
   const removeRow = (idx) => setRows(rows.filter((_, i) => i !== idx));
   const updateRow = (idx, patch) => setRows(rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
 
@@ -680,7 +713,11 @@ function MenuForm({ name, setName, price, setPrice, rows, ingredients, addRow, r
             ))}
           </select>
           <input placeholder="사용량" type="number" value={r.amount_used} onChange={(e) => updateRow(idx, { amount_used: e.target.value })} style={{ ...inputStyle, flex: 1 }} />
-          <input placeholder="단위" value={r.unit} onChange={(e) => updateRow(idx, { unit: e.target.value })} style={{ ...inputStyle, flex: 1 }} />
+          <select value={r.unit} onChange={(e) => updateRow(idx, { unit: e.target.value })} style={{ ...inputStyle, flex: 1 }}>
+            {UNIT_OPTIONS.map((u) => (
+              <option key={u} value={u}>{u}</option>
+            ))}
+          </select>
           <button onClick={() => removeRow(idx)} style={{ border: "none", background: "transparent", color: "#FF6A45", fontSize: 18, cursor: "pointer", padding: "0 4px" }}>×</button>
         </div>
       ))}
