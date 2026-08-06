@@ -705,20 +705,37 @@ function MenuForm({ name, setName, price, setPrice, rows, ingredients, addRow, r
       </div>
 
       <div style={{ fontSize: 12.5, color: "#64708A", fontWeight: 600 }}>구성 재료</div>
+      <div style={{ fontSize: 11, color: "#A6AEC1", marginTop: -6 }}>
+        여러 인분을 한 번에 만들 때는 "등분"에 전체를 몇으로 나누는지 넣어주세요 (예: 4kg으로 50인분 만들면 등분 50)
+      </div>
       {rows.map((r, idx) => (
-        <div key={idx} style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <select value={r.ingredient_id} onChange={(e) => updateRow(idx, { ingredient_id: e.target.value })} style={{ ...inputStyle, flex: 2 }}>
-            {ingredients.map((ing) => (
-              <option key={ing.id} value={ing.id}>{ing.name}</option>
-            ))}
-          </select>
-          <input placeholder="사용량" type="number" value={r.amount_used} onChange={(e) => updateRow(idx, { amount_used: e.target.value })} style={{ ...inputStyle, flex: 1 }} />
-          <select value={r.unit} onChange={(e) => updateRow(idx, { unit: e.target.value })} style={{ ...inputStyle, flex: 1 }}>
-            {UNIT_OPTIONS.map((u) => (
-              <option key={u} value={u}>{u}</option>
-            ))}
-          </select>
-          <button onClick={() => removeRow(idx)} style={{ border: "none", background: "transparent", color: "#FF6A45", fontSize: 18, cursor: "pointer", padding: "0 4px" }}>×</button>
+        <div key={idx} style={{ background: "#F3F6FB", borderRadius: 10, padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <select value={r.ingredient_id} onChange={(e) => updateRow(idx, { ingredient_id: e.target.value })} style={{ ...inputStyle, flex: 1 }}>
+              {ingredients.map((ing) => (
+                <option key={ing.id} value={ing.id}>{ing.name}</option>
+              ))}
+            </select>
+            <button onClick={() => removeRow(idx)} style={{ border: "none", background: "transparent", color: "#FF6A45", fontSize: 18, cursor: "pointer", padding: "0 4px" }}>×</button>
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 10, color: "#A6AEC1", marginBottom: 2 }}>사용량</div>
+              <input placeholder="80" type="number" value={r.amount_used} onChange={(e) => updateRow(idx, { amount_used: e.target.value })} style={inputStyle} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 10, color: "#A6AEC1", marginBottom: 2 }}>단위</div>
+              <select value={r.unit} onChange={(e) => updateRow(idx, { unit: e.target.value })} style={inputStyle}>
+                {UNIT_OPTIONS.map((u) => (
+                  <option key={u} value={u}>{u}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 10, color: "#A6AEC1", marginBottom: 2 }}>등분 (기본 1)</div>
+              <input placeholder="1" type="number" value={r.divide_by} onChange={(e) => updateRow(idx, { divide_by: e.target.value })} style={inputStyle} />
+            </div>
+          </div>
         </div>
       ))}
       <button onClick={addRow} style={{ ...dashedBtnStyle, padding: "9px 0", fontSize: 12.5 }}>+ 재료 추가</button>
