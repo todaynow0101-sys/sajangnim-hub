@@ -1326,7 +1326,7 @@ function ScheduleTab({ paylog }) {
         if (row.id) {
           res = await supabase.from("schedules").update({ hours: hoursVal }).eq("id", row.id);
         } else if (hoursVal > 0) {
-          res = await supabase.from("schedules").insert({ employee_id: employeeId, user_id: userData.user.id, year, month, day_of_month: Number(day), hours: hoursVal });
+          res = await supabase.from("schedules").insert({ employee_id: employeeId, year, month, day_of_month: Number(day), hours: hoursVal });
         }
         if (res?.error) errors.push(res.error.message);
       })
@@ -1396,7 +1396,7 @@ function ScheduleTab({ paylog }) {
         if (existingByDay[day]) {
           await supabase.from("schedules").update({ hours: hoursVal }).eq("id", existingByDay[day]);
         } else {
-          await supabase.from("schedules").insert({ employee_id: emp.id, user_id: userData.user.id, year, month, day_of_month: day, hours: hoursVal });
+          await supabase.from("schedules").insert({ employee_id: emp.id, year, month, day_of_month: day, hours: hoursVal });
         }
       }
       copiedCount += 1;
