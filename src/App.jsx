@@ -13,6 +13,9 @@ import {
   Store,
   Bell,
   LogOut,
+  GripVertical,
+  ArrowDownAZ,
+  ArrowUpAZ,
   Check,
   ArrowRight,
   Building2,
@@ -330,6 +333,24 @@ function EmptyState({ text }) {
   return <div style={{ textAlign: "center", padding: "30px 0", color: "#64708A", fontSize: 13.5 }}>{text}</div>;
 }
 
+// 순서 변경(드래그/정렬) 결과를 sort_order 컬럼에 반영
+async function persistOrder(table, orderedItems) {
+  await Promise.all(orderedItems.map((item, idx) => supabase.from(table).update({ sort_order: idx }).eq("id", item.id)));
+}
+
+function SortButtons({ onSortAsc, onSortDesc }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, marginBottom: 2 }}>
+      <button onClick={onSortAsc} title="이름 오름차순" style={{ width: 30, height: 30, borderRadius: 8, border: "1.5px solid #E3E9F3", background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+        <ArrowUpAZ size={14} color="#64708A" />
+      </button>
+      <button onClick={onSortDesc} title="이름 내림차순" style={{ width: 30, height: 30, borderRadius: 8, border: "1.5px solid #E3E9F3", background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+        <ArrowDownAZ size={14} color="#64708A" />
+      </button>
+    </div>
+  );
+}
+
 const emptyIngForm = { name: "", purchase_price: "", purchase_qty: "", unit: "kg", shipping_fee: "0", sub_unit_name: "", sub_unit_qty: "" };
 
 function IngredientsTab({ data }) {
@@ -337,6 +358,7 @@ function IngredientsTab({ data }) {
   const [editingId, setEditingId] = useState(null); // null | "new" | ingredient.id
   const [form, setForm] = useState(emptyIngForm);
   const [saving, setSaving] = useState(false);
+  const [dragIndex, setDragIndex] = useState(null);
 
   const openNew = () => {
     setForm(emptyIngForm);
@@ -371,7 +393,7 @@ function IngredientsTab({ data }) {
     let err;
     if (editingId === "new") {
       const { data: userData } = await supabase.auth.getUser();
-      ({ error: err } = await supabase.from("gagye_ingredients").insert({ ...payload, user_id: userData.user.id }));
+      ({ error: err } = await supabase.from("gagye_ingredients").insert({ ...payload, user_id: userData.user.id, sort_order: ingredients.length }));
     } else {
       ({ error: err } = await supabase.from("gagye_ingredients").update(payload).eq("id", editingId));
     }
@@ -391,33 +413,61 @@ function IngredientsTab({ data }) {
     reload();
   };
 
+  const handleDrop = async (dropIndex) => {
+    if (dragIndex === null || dragIndex === dropIndex) { setDragIndex(null); return; }
+    const reordered = [...ingredients];
+    const [moved] = reordered.splice(dragIndex, 1);
+    reordered.splice(dropIndex, 0, moved);
+    setDragIndex(null);
+    await persistOrder("gagye_ingredients", reordered);
+    reload();
+  };
+
+  const applySort = async (dir) => {
+    const sorted = [...ingredients].sort((a, b) => (dir === "asc" ? a.name.localeCompare(b.name, "ko") : b.name.localeCompare(a.name, "ko")));
+    await persistOrder("gagye_ingredients", sorted);
+    reload();
+  };
+
   if (loading) return <EmptyState text="불러오는 중..." />;
   if (error) return <EmptyState text={`불러오기 실패: ${error}`} />;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {ingredients.length > 1 && <SortButtons onSortAsc={() => applySort("asc")} onSortDesc={() => applySort("desc")} />}
       {ingredients.length === 0 && editingId !== "new" && <EmptyState text="등록된 재료가 없어요" />}
-      {ingredients.map((ing) =>
+      {ingredients.map((ing, idx) =>
         editingId === ing.id ? (
           <IngredientForm key={ing.id} form={form} setForm={setForm} onCancel={() => setEditingId(null)} onSave={save} onDelete={() => remove(ing.id)} saving={saving} isNew={false} />
         ) : (
-          <button
+          <div
             key={ing.id}
-            onClick={() => openEdit(ing)}
-            style={{ textAlign: "left", background: "#fff", border: "none", borderRadius: 14, padding: "14px 16px", boxShadow: "0 1px 2px rgba(16,24,43,0.05)", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}
+            draggable
+            onDragStart={() => setDragIndex(idx)}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={() => handleDrop(idx)}
+            style={{ opacity: dragIndex === idx ? 0.4 : 1, display: "flex", alignItems: "stretch", gap: 4 }}
           >
-            <div>
-              <div style={{ fontSize: 14.5, fontWeight: 700 }}>{ing.name}</div>
-              <div style={{ fontSize: 12, color: "#64708A", marginTop: 2 }}>
-                {ing.purchase_qty}{ing.unit}당 {Number(ing.purchase_price).toLocaleString()}원
-                {ing.shipping_fee > 0 ? ` (배송비 ${Number(ing.shipping_fee).toLocaleString()}원)` : ""}
+            <div style={{ display: "flex", alignItems: "center", cursor: "grab", color: "#C7D0E0", padding: "0 2px" }}>
+              <GripVertical size={16} />
+            </div>
+            <button
+              onClick={() => openEdit(ing)}
+              style={{ flex: 1, textAlign: "left", background: "#fff", border: "none", borderRadius: 14, padding: "14px 16px", boxShadow: "0 1px 2px rgba(16,24,43,0.05)", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}
+            >
+              <div>
+                <div style={{ fontSize: 14.5, fontWeight: 700 }}>{ing.name}</div>
+                <div style={{ fontSize: 12, color: "#64708A", marginTop: 2 }}>
+                  {ing.purchase_qty}{ing.unit}당 {Number(ing.purchase_price).toLocaleString()}원
+                  {ing.shipping_fee > 0 ? ` (배송비 ${Number(ing.shipping_fee).toLocaleString()}원)` : ""}
+                </div>
               </div>
-            </div>
-            <div style={{ fontSize: 14.5, fontWeight: 700, color: "#0A6E5D", textAlign: "right" }}>
-              {Math.round(ingredientUnitCost(ing)).toLocaleString()}원
-              <div style={{ fontSize: 10.5, color: "#A6AEC1", fontWeight: 600 }}>{`/${ing.unit}`}</div>
-            </div>
-          </button>
+              <div style={{ fontSize: 14.5, fontWeight: 700, color: "#0A6E5D", textAlign: "right" }}>
+                {Math.round(ingredientUnitCost(ing)).toLocaleString()}원
+                <div style={{ fontSize: 10.5, color: "#A6AEC1", fontWeight: 600 }}>{`/${ing.unit}`}</div>
+              </div>
+            </button>
+          </div>
         )
       )}
 
@@ -462,6 +512,7 @@ function MenuTab({ data }) {
   const [price, setPrice] = useState("");
   const [rows, setRows] = useState([]); // [{ingredient_id, amount_used, divide_by, unit}]
   const [saving, setSaving] = useState(false);
+  const [dragIndex, setDragIndex] = useState(null);
 
   const openNew = () => {
     setName("");
@@ -494,7 +545,7 @@ function MenuTab({ data }) {
     let menuId = editingId;
     if (editingId === "new") {
       const { data: userData } = await supabase.auth.getUser();
-      const { data: inserted, error: err } = await supabase.from("gagye_menus").insert({ user_id: userData.user.id, name, price: priceValue }).select().single();
+      const { data: inserted, error: err } = await supabase.from("gagye_menus").insert({ user_id: userData.user.id, name, price: priceValue, sort_order: menus.length }).select().single();
       if (err) { setSaving(false); return; }
       menuId = inserted.id;
     } else {
@@ -528,13 +579,30 @@ function MenuTab({ data }) {
     reload();
   };
 
+  const handleDrop = async (dropIndex) => {
+    if (dragIndex === null || dragIndex === dropIndex) { setDragIndex(null); return; }
+    const reordered = [...menus];
+    const [moved] = reordered.splice(dragIndex, 1);
+    reordered.splice(dropIndex, 0, moved);
+    setDragIndex(null);
+    await persistOrder("gagye_menus", reordered);
+    reload();
+  };
+
+  const applySort = async (dir) => {
+    const sorted = [...menus].sort((a, b) => (dir === "asc" ? a.name.localeCompare(b.name, "ko") : b.name.localeCompare(a.name, "ko")));
+    await persistOrder("gagye_menus", sorted);
+    reload();
+  };
+
   if (loading) return <EmptyState text="불러오는 중..." />;
   if (error) return <EmptyState text={`불러오기 실패: ${error}`} />;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {menus.length > 1 && <SortButtons onSortAsc={() => applySort("asc")} onSortDesc={() => applySort("desc")} />}
       {menus.length === 0 && editingId !== "new" && <EmptyState text="등록된 메뉴가 없어요" />}
-      {menus.map((menu) => {
+      {menus.map((menu, idx) => {
         if (editingId === menu.id) {
           return (
             <MenuForm key={menu.id} name={name} setName={setName} price={price} setPrice={setPrice} rows={rows} ingredients={ingredients} addRow={addRow} removeRow={removeRow} updateRow={updateRow} onCancel={() => setEditingId(null)} onSave={save} onDelete={() => remove(menu.id)} saving={saving} isNew={false} />
@@ -543,20 +611,31 @@ function MenuTab({ data }) {
         const items = menuIngredients.filter((mi) => mi.menu_id === menu.id);
         const cost = computeMenuCost(menu.id, menuIngredients, ingredientsById);
         return (
-          <button
+          <div
             key={menu.id}
-            onClick={() => openEdit(menu)}
-            style={{ textAlign: "left", width: "100%", background: "#fff", border: "none", borderRadius: 14, padding: "14px 16px", boxShadow: "0 1px 2px rgba(16,24,43,0.05)", cursor: "pointer" }}
+            draggable
+            onDragStart={() => setDragIndex(idx)}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={() => handleDrop(idx)}
+            style={{ opacity: dragIndex === idx ? 0.4 : 1, display: "flex", alignItems: "stretch", gap: 4 }}
           >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-              <div style={{ fontSize: 14.5, fontWeight: 700 }}>{menu.name}</div>
-              <div style={{ fontSize: 12.5, fontWeight: 700, color: "#10182B" }}>{Number(menu.price || 0).toLocaleString()}원</div>
+            <div style={{ display: "flex", alignItems: "center", cursor: "grab", color: "#C7D0E0", padding: "0 2px" }}>
+              <GripVertical size={16} />
             </div>
-            <div style={{ fontSize: 12, color: "#64708A", marginBottom: 6 }}>
-              {items.map((i) => ingredientsById[i.ingredient_id]?.name).filter(Boolean).join(" · ") || "구성 재료 없음"}
-            </div>
-            <div style={{ fontSize: 13.5, fontWeight: 700, color: "#0A6E5D" }}>원가 {Math.round(cost).toLocaleString()}원</div>
-          </button>
+            <button
+              onClick={() => openEdit(menu)}
+              style={{ flex: 1, textAlign: "left", width: "100%", background: "#fff", border: "none", borderRadius: 14, padding: "14px 16px", boxShadow: "0 1px 2px rgba(16,24,43,0.05)", cursor: "pointer" }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <div style={{ fontSize: 14.5, fontWeight: 700 }}>{menu.name}</div>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: "#10182B" }}>{Number(menu.price || 0).toLocaleString()}원</div>
+              </div>
+              <div style={{ fontSize: 12, color: "#64708A", marginBottom: 6 }}>
+                {items.map((i) => ingredientsById[i.ingredient_id]?.name).filter(Boolean).join(" · ") || "구성 재료 없음"}
+              </div>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: "#0A6E5D" }}>원가 {Math.round(cost).toLocaleString()}원</div>
+            </button>
+          </div>
         );
       })}
 
@@ -651,11 +730,13 @@ function ProfitTab({ data }) {
   return (
     <div>
       <div style={{ background: "#fff", borderRadius: 16, padding: 18, boxShadow: "0 1px 2px rgba(16,24,43,0.05)", marginBottom: 12 }}>
-        <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 10, fontWeight: 600 }}>메뉴 담기 (여러 개 선택 가능)</div>
+        <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 3, fontWeight: 600 }}>메뉴 담기 (여러 개 선택 가능)</div>
+        <div style={{ fontSize: 11, color: "#A6AEC1", marginBottom: 10 }}>*판매가 · 원가 · 원가율</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {menus.map((m) => {
             const inCart = !!cart[m.id];
             const unitCost = computeMenuCost(m.id, menuIngredients, ingredientsById);
+            const costRate = Number(m.price) > 0 ? ((unitCost / Number(m.price)) * 100).toFixed(1) : null;
             return (
               <div key={m.id} style={{ borderRadius: 12, border: inCart ? "1.5px solid #0A6E5D" : "1.5px solid #E3E9F3", background: inCart ? "#E4F3EF" : "#fff", overflow: "hidden" }}>
                 <button
@@ -663,7 +744,9 @@ function ProfitTab({ data }) {
                   style={{ width: "100%", textAlign: "left", background: "transparent", border: "none", padding: "11px 12px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}
                 >
                   <span style={{ fontSize: 13.5, fontWeight: 700 }}>{m.name}</span>
-                  <span style={{ fontSize: 12, color: "#64708A" }}>판매가 {Number(m.price || 0).toLocaleString()}원 · 원가 {Math.round(unitCost).toLocaleString()}원</span>
+                  <span style={{ fontSize: 12, color: "#64708A" }}>
+                    판매가 {Number(m.price || 0).toLocaleString()}원 · 원가 {Math.round(unitCost).toLocaleString()}원{costRate ? `/${costRate}%` : ""}
+                  </span>
                 </button>
                 {inCart && (
                   <div style={{ display: "flex", gap: 8, padding: "0 12px 12px" }}>
@@ -688,6 +771,7 @@ function ProfitTab({ data }) {
           <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
             <StatBox label="합산 판매가" value={`${totalPrice.toLocaleString()}원`} />
             <StatBox label="합산 원가" value={`${Math.round(totalCost).toLocaleString()}원`} />
+            <StatBox label="원가율" value={totalPrice > 0 ? `${((totalCost / totalPrice) * 100).toFixed(1)}%` : "-"} />
           </div>
 
           <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 6, fontWeight: 600 }}>할인</div>
@@ -752,6 +836,7 @@ function ProfitTab({ data }) {
           <div style={{ fontSize: 28, fontWeight: 800 }}>{net.toLocaleString()}원</div>
           <div style={{ display: "flex", gap: 14, marginTop: 12, fontSize: 12.5, color: "#C7D0E0", flexWrap: "wrap" }}>
             <span>마진율 {marginRate}%</span>
+            <span>원가율 {discountedPrice > 0 ? ((totalCost / discountedPrice) * 100).toFixed(1) : 0}%</span>
             <span>할인가 {discountedPrice.toLocaleString()}원</span>
             <span>수수료 {feeAmount.toLocaleString()}원</span>
           </div>
@@ -891,7 +976,7 @@ function GagyeDetail({ goBack }) {
   );
 }
 
-/* ───────────────────────── 페이로그 상세 ───────────────────────── */
+/* ───────────────────────── 페이로그 상세 (Supabase 연동) ───────────────────────── */
 
 const PAYLOG_TABS = [
   { id: "staff", label: "직원" },
@@ -899,111 +984,424 @@ const PAYLOG_TABS = [
   { id: "payroll", label: "급여계산" },
 ];
 
-const STAFF = [
-  { id: 1, name: "김OO", type: "4대보험", role: "홀 · 파트타임", wage: "시급 10,500원", schedule: "월·수·금 10:00-16:00" },
-  { id: 2, name: "이OO", type: "4대보험", role: "주방 · 정규직", wage: "월 245만원", schedule: "주 5일 09:00-18:00" },
-  { id: 3, name: "박OO", type: "3.3%", role: "배달보조", wage: "건당 정산", schedule: "화·목·토 17:00-22:00" },
-  { id: 4, name: "최OO", type: "3.3%", role: "주방보조", wage: "시급 11,000원", schedule: "주말 11:00-15:00" },
-];
+const emptyEmployeeForm = {
+  pay_type: "hourly",
+  name: "",
+  hourly_wage: "",
+  monthly_salary: "",
+  juhyu_included: false,
+  tax33: false,
+  ins_pension: false,
+  ins_health: false,
+  ins_employment: false,
+  dependents: "",
+};
 
-function TypeBadge({ type }) {
-  const is433 = type === "3.3%";
+function usePaylogEmployees() {
+  const [employees, setEmployees] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const reload = async () => {
+    setLoading(true);
+    setError(null);
+    const { data, error: err } = await supabase.from("employees").select("*").order("created_at", { ascending: true });
+    if (err) setError(err.message);
+    else setEmployees(data || []);
+    setLoading(false);
+  };
+
+  React.useEffect(() => {
+    reload();
+  }, []);
+
+  return { employees, loading, error, reload };
+}
+
+function TypeBadge({ children, tone }) {
+  const tones = {
+    blue: { bg: "#EAF0FE", color: "#3B5BDB" },
+    orange: { bg: "#FFF3E0", color: "#D97706" },
+    gray: { bg: "#F3F6FB", color: "#64708A" },
+  };
+  const t = tones[tone] || tones.gray;
   return (
-    <span
-      style={{
-        fontSize: 11,
-        fontWeight: 700,
-        padding: "3px 8px",
-        borderRadius: 999,
-        background: is433 ? "#FFF3E0" : "#E4F3EF",
-        color: is433 ? "#D97706" : "#0A6E5D",
-        flexShrink: 0,
-      }}
-    >
-      {type}
+    <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 999, background: t.bg, color: t.color, flexShrink: 0 }}>
+      {children}
     </span>
   );
 }
 
-function StaffTab() {
+function StaffTab({ paylog }) {
+  const { employees, loading, error, reload } = paylog;
+  const [editingId, setEditingId] = useState(null); // null | "new" | employee.id
+  const [form, setForm] = useState(emptyEmployeeForm);
+  const [saving, setSaving] = useState(false);
+
+  const openNew = () => {
+    setForm(emptyEmployeeForm);
+    setEditingId("new");
+  };
+  const openEdit = (emp) => {
+    setForm({
+      pay_type: emp.pay_type || "hourly",
+      name: emp.name || "",
+      hourly_wage: emp.hourly_wage != null ? String(emp.hourly_wage) : "",
+      monthly_salary: emp.monthly_salary != null ? String(emp.monthly_salary) : "",
+      juhyu_included: !!emp.juhyu_included,
+      tax33: !!emp.tax33,
+      ins_pension: !!emp.ins_pension,
+      ins_health: !!emp.ins_health,
+      ins_employment: !!emp.ins_employment,
+      dependents: emp.dependents != null ? String(emp.dependents) : "",
+    });
+    setEditingId(emp.id);
+  };
+
+  const save = async () => {
+    if (!form.name) return;
+    setSaving(true);
+    const payload = {
+      pay_type: form.pay_type,
+      name: form.name,
+      hourly_wage: form.pay_type === "hourly" ? Number(form.hourly_wage) || 0 : null,
+      monthly_salary: form.pay_type === "monthly" ? Number(form.monthly_salary) || 0 : null,
+      juhyu_included: form.juhyu_included,
+      tax33: form.tax33,
+      ins_pension: form.ins_pension,
+      ins_health: form.ins_health,
+      ins_employment: form.ins_employment,
+      dependents: form.dependents ? Number(form.dependents) : null,
+    };
+    let err;
+    if (editingId === "new") {
+      const { data: userData } = await supabase.auth.getUser();
+      ({ error: err } = await supabase.from("employees").insert({ ...payload, user_id: userData.user.id }));
+    } else {
+      ({ error: err } = await supabase.from("employees").update(payload).eq("id", editingId));
+    }
+    setSaving(false);
+    if (!err) {
+      setEditingId(null);
+      reload();
+    }
+  };
+
+  const remove = async (id) => {
+    if (!window.confirm("이 직원을 삭제할까요? 스케줄 기록도 같이 사라져요.")) return;
+    setSaving(true);
+    await supabase.from("employees").delete().eq("id", id);
+    setSaving(false);
+    setEditingId(null);
+    reload();
+  };
+
+  if (loading) return <EmptyState text="불러오는 중..." />;
+  if (error) return <EmptyState text={`불러오기 실패: ${error}`} />;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {STAFF.map((s) => (
-        <div key={s.id} style={{ background: "#fff", borderRadius: 14, padding: "14px 16px", boxShadow: "0 1px 2px rgba(16,24,43,0.05)" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-            <div>
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ fontSize: 14.5, fontWeight: 700 }}>{s.name}</span>
-                <TypeBadge type={s.type} />
-              </div>
-              <div style={{ fontSize: 12, color: "#64708A", marginTop: 3 }}>{s.role}</div>
+      {employees.length === 0 && editingId !== "new" && <EmptyState text="등록된 직원이 없어요" />}
+      {employees.map((emp) =>
+        editingId === emp.id ? (
+          <EmployeeForm key={emp.id} form={form} setForm={setForm} onCancel={() => setEditingId(null)} onSave={save} onDelete={() => remove(emp.id)} saving={saving} isNew={false} />
+        ) : (
+          <button
+            key={emp.id}
+            onClick={() => openEdit(emp)}
+            style={{ textAlign: "left", background: "#fff", border: "none", borderRadius: 14, padding: "14px 16px", boxShadow: "0 1px 2px rgba(16,24,43,0.05)", cursor: "pointer" }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 14.5, fontWeight: 700 }}>{emp.name}</span>
+              <TypeBadge tone="blue">{emp.pay_type === "hourly" ? "시급제" : "월급제"}</TypeBadge>
+              {emp.tax33 && <TypeBadge tone="orange">3.3%</TypeBadge>}
+              {(emp.ins_pension || emp.ins_health || emp.ins_employment) && <TypeBadge tone="gray">4대보험</TypeBadge>}
             </div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: "#0A6E5D" }}>{s.wage}</div>
-          </div>
-        </div>
-      ))}
+            <div style={{ fontSize: 13, color: "#64708A" }}>
+              {emp.pay_type === "hourly" ? `${Number(emp.hourly_wage || 0).toLocaleString()}원/시간` : `월 ${Number(emp.monthly_salary || 0).toLocaleString()}원`}
+            </div>
+          </button>
+        )
+      )}
+      {editingId === "new" ? (
+        <EmployeeForm form={form} setForm={setForm} onCancel={() => setEditingId(null)} onSave={save} saving={saving} isNew={true} />
+      ) : (
+        <button onClick={openNew} style={dashedBtnStyle}>+ 직원 추가</button>
+      )}
+    </div>
+  );
+}
+
+function ToggleRow({ label, desc, checked, onChange }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", background: "#F3F6FB", borderRadius: 10 }}>
+      <div>
+        <div style={{ fontSize: 13, fontWeight: 700 }}>{label}</div>
+        {desc && <div style={{ fontSize: 11, color: "#64708A", marginTop: 2 }}>{desc}</div>}
+      </div>
       <button
-        style={{
-          padding: "13px 0", borderRadius: 12, border: "1.5px dashed #C7D0E0", background: "transparent",
-          color: "#64708A", fontSize: 13.5, fontWeight: 700, cursor: "pointer",
-        }}
+        onClick={() => onChange(!checked)}
+        style={{ width: 40, height: 24, borderRadius: 999, border: "none", cursor: "pointer", background: checked ? "#10182B" : "#D7DDE9", position: "relative", flexShrink: 0 }}
       >
-        + 직원 추가 (4대보험 / 3.3% 선택)
+        <div style={{ width: 18, height: 18, borderRadius: "50%", background: "#fff", position: "absolute", top: 3, left: checked ? 19 : 3, transition: "left 0.15s ease" }} />
       </button>
     </div>
   );
 }
 
-function ScheduleTab() {
+function EmployeeForm({ form, setForm, onCancel, onSave, onDelete, saving, isNew }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {STAFF.map((s) => (
-        <div key={s.id} style={{ background: "#fff", borderRadius: 14, padding: "14px 16px", boxShadow: "0 1px 2px rgba(16,24,43,0.05)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            <div style={{ fontSize: 14, fontWeight: 700 }}>{s.name}</div>
-            <div style={{ fontSize: 12.5, color: "#64708A", marginTop: 3 }}>{s.schedule}</div>
-          </div>
-          <Clock size={16} color="#A6AEC1" />
-        </div>
-      ))}
+    <div style={{ background: "#fff", borderRadius: 14, padding: 16, boxShadow: "0 1px 2px rgba(16,24,43,0.05)", display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ display: "flex", gap: 6 }}>
+        {[
+          { id: "hourly", label: "시급제" },
+          { id: "monthly", label: "월급제" },
+        ].map((t) => {
+          const sel = form.pay_type === t.id;
+          return (
+            <button key={t.id} onClick={() => setForm({ ...form, pay_type: t.id })} style={{ flex: 1, padding: "9px 0", borderRadius: 10, border: "none", cursor: "pointer", fontSize: 12.5, fontWeight: 700, background: sel ? "#10182B" : "#F3F6FB", color: sel ? "#fff" : "#64708A" }}>
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+      <input placeholder="이름" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={inputStyle} />
+      {form.pay_type === "hourly" ? (
+        <input placeholder="시급(원)" type="number" value={form.hourly_wage} onChange={(e) => setForm({ ...form, hourly_wage: e.target.value })} style={inputStyle} />
+      ) : (
+        <input placeholder="월급(원)" type="number" value={form.monthly_salary} onChange={(e) => setForm({ ...form, monthly_salary: e.target.value })} style={inputStyle} />
+      )}
+      <ToggleRow label="주휴수당 포함 대상" desc="주 15시간 이상 근무 시 해당" checked={form.juhyu_included} onChange={(v) => setForm({ ...form, juhyu_included: v })} />
+      <ToggleRow label="3.3% 원천징수 적용" desc="소득세 3% + 지방소득세 0.3%" checked={form.tax33} onChange={(v) => setForm({ ...form, tax33: v })} />
+      <ToggleRow label="국민연금 공제" checked={form.ins_pension} onChange={(v) => setForm({ ...form, ins_pension: v })} />
+      <ToggleRow label="건강보험 공제" checked={form.ins_health} onChange={(v) => setForm({ ...form, ins_health: v })} />
+      <ToggleRow label="고용보험 공제" checked={form.ins_employment} onChange={(v) => setForm({ ...form, ins_employment: v })} />
+      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+        {!isNew && (
+          <button onClick={onDelete} disabled={saving} style={{ ...secondaryBtnStyle, color: "#FF6A45", borderColor: "#FFD9CC", flex: "0 0 auto", padding: "11px 14px" }}>삭제</button>
+        )}
+        <button onClick={onCancel} style={secondaryBtnStyle}>취소</button>
+        <button onClick={onSave} disabled={saving} style={primaryBtnStyle}>{saving ? "저장 중..." : "저장"}</button>
+      </div>
     </div>
   );
 }
 
-function PayrollTab() {
-  const total = "637만원";
+function daysInMonth(year, month) {
+  return new Date(year, month, 0).getDate();
+}
+
+function ScheduleTab({ paylog }) {
+  const { employees, loading: empLoading } = paylog;
+  const now = new Date();
+  const [year, setYear] = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth() + 1);
+  const [employeeId, setEmployeeId] = useState(null);
+  const [rows, setRows] = useState({}); // day -> { id?, hours }
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  React.useEffect(() => {
+    if (!employeeId && employees.length > 0) setEmployeeId(employees[0].id);
+  }, [employees, employeeId]);
+
+  const loadSchedule = async () => {
+    if (!employeeId) return;
+    setLoading(true);
+    const { data } = await supabase.from("schedules").select("*").eq("employee_id", employeeId).eq("year", year).eq("month", month);
+    const map = {};
+    (data || []).forEach((r) => { map[r.day_of_month] = { id: r.id, hours: String(r.hours) }; });
+    setRows(map);
+    setLoading(false);
+  };
+
+  React.useEffect(() => {
+    loadSchedule();
+    // eslint-disable-next-line
+  }, [employeeId, year, month]);
+
+  const updateHour = (day, hours) => setRows((prev) => ({ ...prev, [day]: { ...prev[day], hours } }));
+
+  const saveAll = async () => {
+    if (!employeeId) return;
+    setSaving(true);
+    const { data: userData } = await supabase.auth.getUser();
+    const days = Object.keys(rows);
+    await Promise.all(
+      days.map(async (day) => {
+        const row = rows[day];
+        const hoursVal = Number(row.hours) || 0;
+        if (row.id) {
+          await supabase.from("schedules").update({ hours: hoursVal }).eq("id", row.id);
+        } else if (hoursVal > 0) {
+          await supabase.from("schedules").insert({ employee_id: employeeId, user_id: userData.user.id, year, month, day_of_month: Number(day), hours: hoursVal });
+        }
+      })
+    );
+    setSaving(false);
+    loadSchedule();
+  };
+
+  if (empLoading) return <EmptyState text="불러오는 중..." />;
+  if (employees.length === 0) return <EmptyState text="먼저 직원을 등록해주세요" />;
+
+  const total = daysInMonth(year, month);
+  const totalHours = Object.values(rows).reduce((sum, r) => sum + (Number(r.hours) || 0), 0);
+
   return (
     <div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <select value={employeeId || ""} onChange={(e) => setEmployeeId(e.target.value)} style={{ ...inputStyle, flex: 2 }}>
+          {employees.map((e) => (
+            <option key={e.id} value={e.id}>{e.name}</option>
+          ))}
+        </select>
+        <input type="number" value={year} onChange={(e) => setYear(Number(e.target.value) || now.getFullYear())} style={{ ...inputStyle, flex: 1 }} />
+        <input type="number" value={month} min="1" max="12" onChange={(e) => setMonth(Number(e.target.value) || 1)} style={{ ...inputStyle, flex: 1 }} />
+      </div>
+
+      <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 10 }}>이번 달 합계 {totalHours}시간</div>
+
+      {loading ? (
+        <EmptyState text="불러오는 중..." />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {Array.from({ length: total }, (_, i) => i + 1).map((day) => (
+            <div key={day} style={{ display: "flex", alignItems: "center", gap: 10, background: "#fff", borderRadius: 10, padding: "8px 12px", boxShadow: "0 1px 2px rgba(16,24,43,0.05)" }}>
+              <div style={{ width: 32, fontSize: 13, fontWeight: 700, color: "#64708A" }}>{day}일</div>
+              <input
+                type="number"
+                value={rows[day]?.hours || ""}
+                placeholder="0"
+                onChange={(e) => updateHour(day, e.target.value)}
+                style={{ ...inputStyle, textAlign: "right" }}
+              />
+              <span style={{ fontSize: 12, color: "#A6AEC1" }}>시간</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <button onClick={saveAll} disabled={saving} style={{ ...primaryBtnStyle, width: "100%", marginTop: 14, padding: "14px 0" }}>
+        {saving ? "저장 중..." : "저장"}
+      </button>
+    </div>
+  );
+}
+
+// 대략적인 공제율 (2026년 일반 요율 기준 추정치 — 실제 신고 전 반드시 재확인 필요)
+const INSURANCE_RATES = { pension: 4.5, health: 3.545, employment: 0.9 };
+
+// 일요일 시작 기준 주 단위로 묶기 위한 키
+function weekKeyOf(year, month, day) {
+  const d = new Date(year, month - 1, day);
+  const dow = d.getDay(); // 0=일 ~ 6=토
+  d.setDate(d.getDate() - dow);
+  return d.toDateString();
+}
+
+// 주휴수당 = Σ (해당 주 근무시간이 15시간 이상일 때, min(주 근무시간,40)/40 × 8 × 시급)
+// 월 경계에 걸친 주는 해당 월에 입력된 날짜만으로 계산되어 다소 오차가 있을 수 있음
+
+function computePay(emp, hours, juhyuAmount = 0) {
+  const base = emp.pay_type === "hourly" ? Math.round((Number(emp.hourly_wage) || 0) * hours) : Number(emp.monthly_salary) || 0;
+  const juhyu = emp.pay_type === "hourly" && emp.juhyu_included ? Math.round(juhyuAmount) : 0;
+  const gross = base + juhyu;
+  let deductRate = 0;
+  if (emp.tax33) deductRate += 3.3;
+  if (emp.ins_pension) deductRate += INSURANCE_RATES.pension;
+  if (emp.ins_health) deductRate += INSURANCE_RATES.health;
+  if (emp.ins_employment) deductRate += INSURANCE_RATES.employment;
+  const deduction = Math.round((gross * deductRate) / 100);
+  return { base, juhyu, gross, deduction, net: gross - deduction, deductRate };
+}
+
+function PayrollTab({ paylog }) {
+  const { employees, loading: empLoading } = paylog;
+  const now = new Date();
+  const [year, setYear] = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth() + 1);
+  const [hoursByEmployee, setHoursByEmployee] = useState({});
+  const [juhyuByEmployee, setJuhyuByEmployee] = useState({});
+  const [loading, setLoading] = useState(false);
+
+  React.useEffect(() => {
+    const load = async () => {
+      if (employees.length === 0) return;
+      setLoading(true);
+      const ids = employees.map((e) => e.id);
+      const { data } = await supabase.from("schedules").select("employee_id, day_of_month, hours").eq("year", year).eq("month", month).in("employee_id", ids);
+
+      const totalMap = {};
+      const weekMap = {}; // employee_id -> { weekKey: hours }
+      (data || []).forEach((r) => {
+        totalMap[r.employee_id] = (totalMap[r.employee_id] || 0) + Number(r.hours);
+        const wk = weekKeyOf(year, month, r.day_of_month);
+        weekMap[r.employee_id] = weekMap[r.employee_id] || {};
+        weekMap[r.employee_id][wk] = (weekMap[r.employee_id][wk] || 0) + Number(r.hours);
+      });
+
+      const juhyuMap = {};
+      employees.forEach((emp) => {
+        if (emp.pay_type !== "hourly" || !emp.juhyu_included) { juhyuMap[emp.id] = 0; return; }
+        const weeks = weekMap[emp.id] || {};
+        const wage = Number(emp.hourly_wage) || 0;
+        let total = 0;
+        Object.values(weeks).forEach((weekHours) => {
+          if (weekHours >= 15) total += (Math.min(weekHours, 40) / 40) * 8 * wage;
+        });
+        juhyuMap[emp.id] = total;
+      });
+
+      setHoursByEmployee(totalMap);
+      setJuhyuByEmployee(juhyuMap);
+      setLoading(false);
+    };
+    load();
+  }, [employees, year, month]);
+
+  if (empLoading || loading) return <EmptyState text="불러오는 중..." />;
+  if (employees.length === 0) return <EmptyState text="먼저 직원을 등록해주세요" />;
+
+  const rows = employees.map((emp) => {
+    const hours = hoursByEmployee[emp.id] || 0;
+    const pay = computePay(emp, hours, juhyuByEmployee[emp.id] || 0);
+    return { emp, hours, ...pay };
+  });
+  const totalNet = rows.reduce((sum, r) => sum + r.net, 0);
+  const totalGross = rows.reduce((sum, r) => sum + r.gross, 0);
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <input type="number" value={year} onChange={(e) => setYear(Number(e.target.value) || now.getFullYear())} style={{ ...inputStyle, flex: 1 }} />
+        <input type="number" value={month} min="1" max="12" onChange={(e) => setMonth(Number(e.target.value) || 1)} style={{ ...inputStyle, flex: 1 }} />
+      </div>
+
       <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-        <StatBox label="이번 달 인건비" value={total} />
-        <StatBox label="급여일" value="D-6" />
+        <StatBox label={`${year}년 ${month}월 총 인건비(세전)`} value={`${totalGross.toLocaleString()}원`} />
+        <StatBox label="실지급 합계" value={`${totalNet.toLocaleString()}원`} />
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {STAFF.map((s) => (
-          <div key={s.id} style={{ background: "#fff", borderRadius: 14, padding: "14px 16px", boxShadow: "0 1px 2px rgba(16,24,43,0.05)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ fontSize: 14, fontWeight: 700 }}>{s.name}</span>
-                <TypeBadge type={s.type} />
-              </div>
-              <span style={{ fontSize: 14, fontWeight: 700 }}>{s.type === "3.3%" ? "실지급 96.7%" : "4대보험 공제 반영"}</span>
+        {rows.map(({ emp, hours, base, juhyu, gross, deduction, net, deductRate }) => (
+          <div key={emp.id} style={{ background: "#fff", borderRadius: 14, padding: "14px 16px", boxShadow: "0 1px 2px rgba(16,24,43,0.05)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+              <span style={{ fontSize: 14, fontWeight: 700 }}>{emp.name}</span>
+              <span style={{ fontSize: 12, color: "#64708A" }}>{emp.pay_type === "hourly" ? `${hours}시간` : "월급제"}</span>
             </div>
+            <div style={{ fontSize: 12.5, color: "#64708A" }}>
+              기본급 {base.toLocaleString()}원{juhyu > 0 ? ` · 주휴수당 ${Math.round(juhyu).toLocaleString()}원` : ""}
+              {deductRate > 0 ? ` · 공제 ${deductRate.toFixed(1)}% (${deduction.toLocaleString()}원)` : ""}
+            </div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: "#0A6E5D", marginTop: 4 }}>실수령 {net.toLocaleString()}원</div>
           </div>
         ))}
       </div>
 
-      <button
-        style={{
-          marginTop: 16, width: "100%", padding: "15px 0", borderRadius: 14, border: "none",
-          background: "#10182B", color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer",
-        }}
-      >
-        이번 달 급여명세서 내보내기
-      </button>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, fontSize: 12, color: "#64708A" }}>
-        <Info size={13} />
-        4대보험 공제·간이세액·퇴직금은 자동 계산돼요
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 14, fontSize: 11.5, color: "#A6AEC1", lineHeight: 1.5 }}>
+        <Info size={13} style={{ flexShrink: 0 }} />
+        주휴수당은 일요일~토요일 기준 주 15시간 이상 근무 시 자동 계산돼요 (월 경계에 걸친 주는 오차가 있을 수 있어요). 4대보험 공제율은 일반적인 추정치라 실제 신고 전 꼭 확인해주세요.
       </div>
     </div>
   );
@@ -1011,16 +1409,17 @@ function PayrollTab() {
 
 function PaylogDetail({ goBack }) {
   const [tab, setTab] = useState("payroll");
+  const paylog = usePaylogEmployees();
 
   return (
     <div style={{ padding: "0 16px 24px" }}>
       <TopBar title="페이로그" onBack={goBack} />
       <div style={{ padding: "8px 0 0" }}>
-        <p style={{ fontSize: 13.5, color: "#64708A", margin: "0 0 16px" }}>직원 추가 → 스케줄 입력 → 월말 급여 내보내기</p>
+        <p style={{ fontSize: 13.5, color: "#64708A", margin: "0 0 16px" }}>직원 추가 → 스케줄 입력 → 월말 급여 확인</p>
         <SegmentedTabs tabs={PAYLOG_TABS} value={tab} onChange={setTab} />
-        {tab === "staff" && <StaffTab />}
-        {tab === "schedule" && <ScheduleTab />}
-        {tab === "payroll" && <PayrollTab />}
+        {tab === "staff" && <StaffTab paylog={paylog} />}
+        {tab === "schedule" && <ScheduleTab paylog={paylog} />}
+        {tab === "payroll" && <PayrollTab paylog={paylog} />}
       </div>
     </div>
   );
