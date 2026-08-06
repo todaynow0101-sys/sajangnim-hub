@@ -1524,6 +1524,7 @@ function PayrollTab({ paylog }) {
   const [juhyuByEmployee, setJuhyuByEmployee] = useState({});
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
   const exportRef = React.useRef(null);
 
   React.useEffect(() => {
@@ -1571,8 +1572,6 @@ function PayrollTab({ paylog }) {
   });
   const totalNet = rows.reduce((sum, r) => sum + r.net, 0);
   const totalGross = rows.reduce((sum, r) => sum + r.gross, 0);
-
-  const [exportError, setExportError] = useState("");
 
   const exportImage = async () => {
     if (!exportRef.current) return;
