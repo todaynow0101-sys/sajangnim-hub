@@ -360,9 +360,11 @@ function IngredientsTab({ data }) {
   const [form, setForm] = useState(emptyIngForm);
   const [saving, setSaving] = useState(false);
   const [dragIndex, setDragIndex] = useState(null);
+  const [saveError, setSaveError] = useState("");
 
   const openNew = () => {
     setForm(emptyIngForm);
+    setSaveError("");
     setEditingId("new");
   };
 
@@ -376,11 +378,15 @@ function IngredientsTab({ data }) {
       sub_unit_name: ing.sub_unit_name || "",
       sub_unit_qty: ing.sub_unit_qty ? String(ing.sub_unit_qty) : "",
     });
+    setSaveError("");
     setEditingId(ing.id);
   };
 
   const save = async () => {
-    if (!form.name || !form.purchase_price || !form.purchase_qty) return;
+    setSaveError("");
+    if (!form.name) { setSaveError("재료명을 입력해주세요"); return; }
+    if (!form.purchase_price) { setSaveError("구매가를 입력해주세요"); return; }
+    if (!form.purchase_qty) { setSaveError("구매수량을 입력해주세요"); return; }
     setSaving(true);
     const payload = {
       name: form.name,
@@ -393,13 +399,20 @@ function IngredientsTab({ data }) {
     };
     let err;
     if (editingId === "new") {
-      const { data: userData } = await supabase.auth.getUser();
+      const { data: userData, error: authErr } = await supabase.auth.getUser();
+      if (authErr || !userData?.user) {
+        setSaving(false);
+        setSaveError("로그인 정보를 확인할 수 없어요. 다시 로그인해주세요.");
+        return;
+      }
       ({ error: err } = await supabase.from("gagye_ingredients").insert({ ...payload, user_id: userData.user.id, sort_order: ingredients.length }));
     } else {
       ({ error: err } = await supabase.from("gagye_ingredients").update(payload).eq("id", editingId));
     }
     setSaving(false);
-    if (!err) {
+    if (err) {
+      setSaveError(err.message);
+    } else {
       setEditingId(null);
       reload();
     }
@@ -439,7 +452,7 @@ function IngredientsTab({ data }) {
       {ingredients.length === 0 && editingId !== "new" && <EmptyState text="등록된 재료가 없어요" />}
       {ingredients.map((ing, idx) =>
         editingId === ing.id ? (
-          <IngredientForm key={ing.id} form={form} setForm={setForm} onCancel={() => setEditingId(null)} onSave={save} onDelete={() => remove(ing.id)} saving={saving} isNew={false} />
+          <IngredientForm key={ing.id} form={form} setForm={setForm} onCancel={() => setEditingId(null)} onSave={save} onDelete={() => remove(ing.id)} saving={saving} isNew={false} error={saveError} />
         ) : (
           <div
             key={ing.id}
@@ -473,7 +486,7 @@ function IngredientsTab({ data }) {
       )}
 
       {editingId === "new" ? (
-        <IngredientForm form={form} setForm={setForm} onCancel={() => setEditingId(null)} onSave={save} saving={saving} isNew={true} />
+        <IngredientForm form={form} setForm={setForm} onCancel={() => setEditingId(null)} onSave={save} saving={saving} isNew={true} error={saveError} />
       ) : (
         <button onClick={openNew} style={dashedBtnStyle}>+ 재료 등록</button>
       )}
@@ -481,7 +494,7 @@ function IngredientsTab({ data }) {
   );
 }
 
-function IngredientForm({ form, setForm, onCancel, onSave, onDelete, saving, isNew }) {
+function IngredientForm({ form, setForm, onCancel, onSave, onDelete, saving, isNew, error }) {
   return (
     <div style={{ background: "#fff", borderRadius: 14, padding: 16, boxShadow: "0 1px 2px rgba(16,24,43,0.05)", display: "flex", flexDirection: "column", gap: 8 }}>
       <input placeholder="재료명" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={inputStyle} />
@@ -495,6 +508,7 @@ function IngredientForm({ form, setForm, onCancel, onSave, onDelete, saving, isN
         <input placeholder="조리단위명 (예: g, 선택)" value={form.sub_unit_name} onChange={(e) => setForm({ ...form, sub_unit_name: e.target.value })} style={inputStyle} />
         <input placeholder="환산값 (예: 1000)" type="number" value={form.sub_unit_qty} onChange={(e) => setForm({ ...form, sub_unit_qty: e.target.value })} style={inputStyle} />
       </div>
+      {error && <div style={{ fontSize: 12.5, color: "#FF6A45", fontWeight: 600 }}>{error}</div>}
       <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
         {!isNew && (
           <button onClick={onDelete} disabled={saving} style={{ ...secondaryBtnStyle, color: "#FF6A45", borderColor: "#FFD9CC", flex: "0 0 auto", padding: "11px 14px" }}>삭제</button>
@@ -1201,6 +1215,8 @@ function ScheduleTab({ paylog }) {
   const [rows, setRows] = useState({}); // day -> { id?, hours }
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [copying, setCopying] = useState(false);
 
   React.useEffect(() => {
     if (!employeeId && employees.length > 0) setEmployeeId(employees[0].id);
@@ -1209,7 +1225,8 @@ function ScheduleTab({ paylog }) {
   const loadSchedule = async () => {
     if (!employeeId) return;
     setLoading(true);
-    const { data } = await supabase.from("schedules").select("*").eq("employee_id", employeeId).eq("year", year).eq("month", month);
+    const { data, error: err } = await supabase.from("schedules").select("*").eq("employee_id", employeeId).eq("year", year).eq("month", month);
+    if (err) setSaveError(err.message);
     const map = {};
     (data || []).forEach((r) => { map[r.day_of_month] = { id: r.id, hours: String(r.hours) }; });
     setRows(map);
@@ -1225,22 +1242,75 @@ function ScheduleTab({ paylog }) {
 
   const saveAll = async () => {
     if (!employeeId) return;
+    setSaveError("");
     setSaving(true);
-    const { data: userData } = await supabase.auth.getUser();
+    const { data: userData, error: authErr } = await supabase.auth.getUser();
+    if (authErr || !userData?.user) {
+      setSaving(false);
+      setSaveError("로그인 정보를 확인할 수 없어요. 다시 로그인해주세요.");
+      return;
+    }
     const days = Object.keys(rows);
+    const errors = [];
     await Promise.all(
       days.map(async (day) => {
         const row = rows[day];
         const hoursVal = Number(row.hours) || 0;
+        let res;
         if (row.id) {
-          await supabase.from("schedules").update({ hours: hoursVal }).eq("id", row.id);
+          res = await supabase.from("schedules").update({ hours: hoursVal }).eq("id", row.id);
         } else if (hoursVal > 0) {
-          await supabase.from("schedules").insert({ employee_id: employeeId, user_id: userData.user.id, year, month, day_of_month: Number(day), hours: hoursVal });
+          res = await supabase.from("schedules").insert({ employee_id: employeeId, user_id: userData.user.id, year, month, day_of_month: Number(day), hours: hoursVal });
         }
+        if (res?.error) errors.push(res.error.message);
       })
     );
     setSaving(false);
-    loadSchedule();
+    if (errors.length > 0) {
+      setSaveError(errors[0]);
+    } else {
+      loadSchedule();
+    }
+  };
+
+  // 지난달 근무 패턴을 요일 기준으로 이번 달에 복사 (일요일→일요일, 화요일→화요일 ...)
+  const copyLastMonth = async () => {
+    if (!employeeId) return;
+    setCopying(true);
+    setSaveError("");
+    let prevYear = year, prevMonth = month - 1;
+    if (prevMonth === 0) { prevMonth = 12; prevYear = year - 1; }
+    const { data, error: err } = await supabase.from("schedules").select("day_of_month, hours").eq("employee_id", employeeId).eq("year", prevYear).eq("month", prevMonth);
+    setCopying(false);
+    if (err) { setSaveError(err.message); return; }
+    if (!data || data.length === 0) { setSaveError("지난달 근무 기록이 없어요"); return; }
+
+    // 요일별로 가장 많이 나온 근무시간을 대표값으로
+    const byWeekday = {};
+    data.forEach((r) => {
+      const dow = new Date(prevYear, prevMonth - 1, r.day_of_month).getDay();
+      byWeekday[dow] = byWeekday[dow] || {};
+      const key = String(r.hours);
+      byWeekday[dow][key] = (byWeekday[dow][key] || 0) + 1;
+    });
+    const weekdayHours = {};
+    Object.entries(byWeekday).forEach(([dow, counts]) => {
+      let best = null, bestCount = -1;
+      Object.entries(counts).forEach(([h, c]) => { if (c > bestCount) { best = h; bestCount = c; } });
+      weekdayHours[dow] = best;
+    });
+
+    const total = daysInMonth(year, month);
+    setRows((prev) => {
+      const next = { ...prev };
+      for (let day = 1; day <= total; day++) {
+        const dow = new Date(year, month - 1, day).getDay();
+        if (weekdayHours[dow] != null && Number(weekdayHours[dow]) > 0) {
+          next[day] = { id: prev[day]?.id, hours: weekdayHours[dow] };
+        }
+      }
+      return next;
+    });
   };
 
   if (empLoading) return <EmptyState text="불러오는 중..." />;
@@ -1249,20 +1319,28 @@ function ScheduleTab({ paylog }) {
   const total = daysInMonth(year, month);
   const firstWeekday = new Date(year, month - 1, 1).getDay(); // 0=일 ~ 6=토
   const totalHours = Object.values(rows).reduce((sum, r) => sum + (Number(r.hours) || 0), 0);
+  const selectOnFocus = (e) => e.target.select();
 
   return (
     <div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
         <select value={employeeId || ""} onChange={(e) => setEmployeeId(e.target.value)} style={{ ...inputStyle, flex: 2 }}>
           {employees.map((e) => (
             <option key={e.id} value={e.id}>{e.name}</option>
           ))}
         </select>
-        <input type="number" value={year} onChange={(e) => setYear(Number(e.target.value) || now.getFullYear())} style={{ ...inputStyle, flex: 1 }} />
-        <input type="number" value={month} min="1" max="12" onChange={(e) => setMonth(Number(e.target.value) || 1)} style={{ ...inputStyle, flex: 1 }} />
+        <input type="number" value={year} onFocus={selectOnFocus} onChange={(e) => setYear(Number(e.target.value) || now.getFullYear())} style={{ ...inputStyle, flex: 1 }} />
+        <input type="number" value={month} min="1" max="12" onFocus={selectOnFocus} onChange={(e) => setMonth(Number(e.target.value) || 1)} style={{ ...inputStyle, flex: 1 }} />
       </div>
 
-      <div style={{ fontSize: 12.5, color: "#64708A", marginBottom: 10 }}>이번 달 합계 {totalHours}시간</div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <span style={{ fontSize: 12.5, color: "#64708A" }}>이번 달 합계 {totalHours}시간</span>
+        <button onClick={copyLastMonth} disabled={copying} style={{ background: "none", border: "none", color: "#0A6E5D", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+          {copying ? "불러오는 중..." : "지난달 복사"}
+        </button>
+      </div>
+
+      {saveError && <div style={{ fontSize: 12.5, color: "#FF6A45", fontWeight: 600, marginBottom: 10 }}>{saveError}</div>}
 
       {loading ? (
         <EmptyState text="불러오는 중..." />
@@ -1410,8 +1488,8 @@ function PayrollTab({ paylog }) {
   return (
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        <input type="number" value={year} onChange={(e) => setYear(Number(e.target.value) || now.getFullYear())} style={{ ...inputStyle, flex: 1 }} />
-        <input type="number" value={month} min="1" max="12" onChange={(e) => setMonth(Number(e.target.value) || 1)} style={{ ...inputStyle, flex: 1 }} />
+        <input type="number" value={year} onFocus={(e) => e.target.select()} onChange={(e) => setYear(Number(e.target.value) || now.getFullYear())} style={{ ...inputStyle, flex: 1 }} />
+        <input type="number" value={month} min="1" max="12" onFocus={(e) => e.target.select()} onChange={(e) => setMonth(Number(e.target.value) || 1)} style={{ ...inputStyle, flex: 1 }} />
         <button onClick={exportImage} disabled={exporting} style={{ ...primaryBtnStyle, flex: 1, padding: "11px 0" }}>
           {exporting ? "저장 중..." : "이미지 저장"}
         </button>
